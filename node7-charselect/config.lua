@@ -1,14 +1,14 @@
 Node7CharSelectConfig = {}
 
-Node7CharSelectConfig.Debug = GetConvar('node7_environment', 'development') == 'development'
+Node7CharSelectConfig.Debug = false
 Node7CharSelectConfig.MaxCharacters = 4
 Node7CharSelectConfig.AllowDelete = true
-Node7CharSelectConfig.OpenDelay = 1500
+Node7CharSelectConfig.OpenDelay = 700
 Node7CharSelectConfig.ReopenCommand = 'charselect'
 Node7CharSelectConfig.LegacyReopenCommands = { 'character', 'characters' }
 Node7CharSelectConfig.LogoutCommand = 'logout'
-Node7CharSelectConfig.RequestTimeout = 12000
-Node7CharSelectConfig.ModelLoadTimeout = 10000
+Node7CharSelectConfig.RequestTimeout = 8000
+Node7CharSelectConfig.ModelLoadTimeout = 6000
 
 -- Visible selector preview models. node7-skins replaces these with saved skin during final load.
 Node7CharSelectConfig.GenderModels = {
@@ -16,7 +16,7 @@ Node7CharSelectConfig.GenderModels = {
     female = 'a_f_m_valtownfolk_01'
 }
 
-Node7CharSelectConfig.ApplyRandomOutfitVariation = true
+Node7CharSelectConfig.ApplyRandomOutfitVariation = false
 
 Node7CharSelectConfig.Skins = {
     enabled = true,
@@ -25,28 +25,24 @@ Node7CharSelectConfig.Skins = {
     applyBeforeSpawn = true,
     openCreatorOnFirstCreate = false,
     FallbackToGenderModelWhenMissing = true,
-    waitMs = 9000
+    waitMs = 2500
 }
 
 -- Clothing resources are optional and detected at runtime so charselect does not refuse to start.
 -- First started resource in this list gets the saved-clothing load event after spawn.
 Node7CharSelectConfig.Clothing = {
-    enabled = true,
-    delayAfterSpawn = 750,
-    resources = {
-        { resource = 'node7-clothing', event = 'node7-clothing:client:loadSavedClothing' },
-        { resource = 'node7-clothes-store', event = 'node7-clothes-store:client:loadSavedClothing' },
-        { resource = 'node7-tailershops', event = 'node7-tailershops:client:loadSavedClothing' }
-    }
+    enabled = false,
+    delayAfterSpawn = 0,
+    resources = {}
 }
 
 Node7CharSelectConfig.PreviewPed = {
-    enabled = true,
+    enabled = false,
     visible = true,
     defaultGender = 'male'
 }
 
--- Existing characters always spawn at their saved player position.
+-- Play spawns directly at the saved player position.
 -- This fallback is only for brand-new characters or broken/missing stored positions.
 Node7CharSelectConfig.FirstSpawnPosition = {
     x = -325.06,
@@ -56,56 +52,6 @@ Node7CharSelectConfig.FirstSpawnPosition = {
 }
 
 
-Node7CharSelectConfig.SpawnSelector = {
-    enabled = true,
-    resource = 'node7-spawnselect',
-    openEvent = 'node7-spawnselect:client:open',
-    returnEvent = 'node7-charselect:client:spawnSelected',
-    cancelEvent = 'node7-charselect:client:spawnCancelled',
-    timeout = 45000,
-    fallbackToLastLocation = true,
-    useForExistingCharacters = true,
-    useForNewCharacters = true,
-    reopenCharselectOnCancel = true,
-    options = {
-        {
-            id = 'last_location',
-            label = 'Last Location',
-            description = 'Spawn at the saved position for this character.',
-            type = 'last'
-        },
-        {
-            id = 'valentine',
-            label = 'Valentine',
-            description = 'Safe town spawn near Valentine.',
-            position = { x = -325.06, y = 773.62, z = 117.43, w = 286.0 }
-        },
-        {
-            id = 'rhodes',
-            label = 'Rhodes',
-            description = 'Safe town spawn near Rhodes.',
-            position = { x = 1230.49, y = -1298.77, z = 76.90, w = 82.0 }
-        },
-        {
-            id = 'saint_denis',
-            label = 'Saint Denis',
-            description = 'Safe city spawn near Saint Denis.',
-            position = { x = 2558.73, y = -1171.03, z = 53.68, w = 179.0 }
-        },
-        {
-            id = 'blackwater',
-            label = 'Blackwater',
-            description = 'Safe town spawn near Blackwater.',
-            position = { x = -798.43, y = -1314.50, z = 43.67, w = 90.0 }
-        },
-        {
-            id = 'strawberry',
-            label = 'Strawberry',
-            description = 'Safe town spawn near Strawberry.',
-            position = { x = -1792.51, y = -390.19, z = 160.33, w = 327.0 }
-        }
-    }
-}
 
 -- RedEMRP charselect-inspired scene position, kept safe and stable for one visible selector ped.
 Node7CharSelectConfig.SelectorPosition = {
@@ -146,7 +92,7 @@ Node7CharSelectConfig.RequiredFields = {
 
 Node7CharSelectConfig.DefaultLabels = {
     title = 'NODE7 CHARSELECT',
-    subtitle = 'RedEMRP-style selector format with NODE7 citizenid persistence and spawn selector support.',
+    subtitle = '',
     create = 'Create Character',
     setup = 'Finish Setup',
     play = 'Play',
@@ -154,7 +100,8 @@ Node7CharSelectConfig.DefaultLabels = {
 }
 
 -- RedEMRP charselect scene format preserved for NODE7 charselect preview/camera positions.
-Node7CharSelectConfig.DefaultCharScene = 4
+Node7CharSelectConfig.DefaultCharScene = 2
+Node7CharSelectConfig.CharScene = 2
 Node7CharSelectConfig.CharScenes = {
     [1] = {
         MainPedCoord = vector3(322.86, 1477.40, 182.94),

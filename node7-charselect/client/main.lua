@@ -4,8 +4,6 @@ local SelectorCam = nil
 local IsSpawning = false
 local PedFrozen = false
 local openMenu
-local PendingSpawnContext = nil
-local SpawnRequestToken = 0
 
 local PendingRequests = {}
 local RequestCounter = 0
@@ -234,6 +232,8 @@ local function getPlayerGender(player)
     return charinfo and (charinfo.gender or charinfo.sex) or nil
 end
 
+
+
 local function waitForSkinApply(player, openIfMissing)
     local skinConfig = Config.Skins or {}
     if skinConfig.enabled == false then
@@ -407,10 +407,6 @@ local function prepareSelectorScene()
     local ped = PlayerPedId()
     local pos = getPosition(Config.SelectorPosition)
 
-    DoScreenFadeOut(300)
-    local timeout = GetGameTimer() + 2500
-    while not IsScreenFadedOut() and GetGameTimer() < timeout do Wait(0) end
-
     if Config.PreviewPed == nil or Config.PreviewPed.enabled ~= false then
         applyGenderModel(Config.PreviewPed.defaultGender or 'male', false)
         ped = PlayerPedId()
@@ -429,8 +425,6 @@ local function prepareSelectorScene()
     createSelectorCamera()
     applySceneSlot(1)
     hideRadar()
-
-    DoScreenFadeIn(500)
 end
 
 local function closeUiOnly()
@@ -477,119 +471,11 @@ local function spawnAt(position)
     end
 
     DoScreenFadeIn(600)
+    TriggerEvent('node7-charselect:client:spawned', pos)
+    TriggerEvent('node7-charselect:client:characterLoaded', pos)
     IsSpawning = false
 end
 
-
-local function getSpawnSelectorConfig()
-    local cfg = Config.SpawnSelector or {}
-    if cfg.enabled == false then return nil end
-    return cfg
-end
-
-local function copyPosition(position)
-    if type(position) ~= 'table' then return nil end
-    return {
-        x = tonumber(position.x),
-        y = tonumber(position.y),
-        z = tonumber(position.z),
-        w = tonumber(position.w or position.h or position.heading),
-        label = position.label
-    }
-end
-
-local function getSpawnOptions(lastPosition)
-    local cfg = getSpawnSelectorConfig()
-    local options = {}
-
-    if cfg and type(cfg.options) == 'table' then
-        for _, option in ipairs(cfg.options) do
-            if type(option) == 'table' then
-                local clone = {}
-                for k, v in pairs(option) do clone[k] = v end
-                if clone.type == 'last' or clone.id == 'last' or clone.id == 'last_location' then
-                    clone.position = copyPosition(lastPosition)
-                    clone.type = 'last'
-                elseif type(clone.position) == 'table' then
-                    clone.position = copyPosition(clone.position)
-                end
-                options[#options + 1] = clone
-            end
-        end
-    end
-
-    if #options == 0 then
-        options[#options + 1] = {
-            id = 'last_location',
-            label = 'Last Location',
-            description = 'Spawn at your saved character location.',
-            type = 'last',
-            position = copyPosition(lastPosition)
-        }
-    end
-
-    return options
-end
-
-local function findSpawnOption(id)
-    id = tostring(id or '')
-    if id == '' then return nil end
-
-    local cfg = getSpawnSelectorConfig()
-    if not cfg or type(cfg.options) ~= 'table' then return nil end
-
-    for _, option in ipairs(cfg.options) do
-        if type(option) == 'table' and tostring(option.id or option.name or '') == id then
-            return option
-        end
-    end
-
-    return nil
-end
-
-local function resolveSelectedSpawn(selection, context)
-    selection = type(selection) == 'table' and selection or {}
-    context = type(context) == 'table' and context or {}
-
-    if type(selection.position) == 'table' then
-        return selection.position
-    end
-
-    if type(selection.coords) == 'table' then
-        return {
-            x = selection.coords.x,
-            y = selection.coords.y,
-            z = selection.coords.z,
-            w = selection.coords.w or selection.coords.h or selection.coords.heading or selection.heading
-        }
-    end
-
-    if selection.x and selection.y and selection.z then
-        return {
-            x = selection.x,
-            y = selection.y,
-            z = selection.z,
-            w = selection.w or selection.h or selection.heading
-        }
-    end
-
-    local selectedId = selection.id or selection.spawnId or selection.spawn or selection.name
-    local option = findSpawnOption(selectedId)
-    if type(option) == 'table' then
-        if option.type == 'last' then
-            return context.lastPosition or context.defaultPosition
-        end
-        if type(option.position) == 'table' then
-            return option.position
-        end
-    end
-
-    if selection.type == 'last' then
-        return context.lastPosition or context.defaultPosition
-    end
-
-    return context.defaultPosition or context.lastPosition
-end
 
 local function finishLoadedCharacter(result, position)
     CreateThread(function()
@@ -599,7 +485,7 @@ local function finishLoadedCharacter(result, position)
         local ok, err = pcall(function()
             applyPlayerModelFromResult(result, true)
             spawnAt(position)
-            applyPostSpawnLayers(result)
+            -- Clothing is intentionally not opened or loaded by charselect.
         end)
 
         if not ok then
@@ -617,151 +503,10 @@ local function finishLoadedCharacter(result, position)
     end)
 end
 
-local function completePendingSpawn(selection)
-    local context = PendingSpawnContext
-    if not context then return end
-
-    PendingSpawnContext = nil
-    local selectedPosition = resolveSelectedSpawn(selection, context)
-    finishLoadedCharacter(context.result, selectedPosition)
-end
-
-RegisterNetEvent('node7-charselect:client:spawnSelected', function(selection)
-    completePendingSpawn(selection)
-end)
-
-RegisterNetEvent('node7-charselect:client:spawnCancelled', function()
-    local context = PendingSpawnContext
-    if not context then return end
-    PendingSpawnContext = nil
-
-    local cfg = getSpawnSelectorConfig() or {}
-    if cfg.reopenCharselectOnCancel ~= false then
-        openMenu(true)
-    elseif cfg.fallbackToLastLocation ~= false then
-        finishLoadedCharacter(context.result, context.lastPosition or context.defaultPosition)
-    end
-end)
-
--- Compatibility aliases for spawn selectors that emit generic selected/cancelled events.
-RegisterNetEvent('node7-spawnselect:client:selected', function(selection)
-    completePendingSpawn(selection)
-end)
-
-RegisterNetEvent('node7-spawnselector:client:selected', function(selection)
-    completePendingSpawn(selection)
-end)
-
-RegisterNetEvent('node7-spawnselect:client:cancelled', function()
-    TriggerEvent('node7-charselect:client:spawnCancelled')
-end)
-
-RegisterNetEvent('node7-spawnselector:client:cancelled', function()
-    TriggerEvent('node7-charselect:client:spawnCancelled')
-end)
-
-local function tryOpenSpawnSelector(payload)
-    local cfg = getSpawnSelectorConfig()
-    if not cfg then return false end
-
-    local resource = cfg.resource or 'node7-spawnselect'
-    if GetResourceState(resource) ~= 'started' then
-        return false
-    end
-
-    local opened = false
-    local exportNames = { 'OpenSpawnSelector', 'OpenSelector', 'OpenSpawnMenu', 'Open' }
-
-    for _, exportName in ipairs(exportNames) do
-        local ok = pcall(function()
-            if exports[resource] and exports[resource][exportName] then
-                exports[resource][exportName](payload)
-                opened = true
-            end
-        end)
-        if ok and opened then return true end
-    end
-
-    TriggerEvent(cfg.openEvent or 'node7-spawnselect:client:open', payload)
-    return true
-end
-
-local function shouldUseSpawnSelector(result)
-    local cfg = getSpawnSelectorConfig()
-    if not cfg then return false end
-
-    if result.created == true or result.setup == true then
-        if cfg.useForNewCharacters == false then return false end
-    elseif cfg.useForExistingCharacters == false then
-        return false
-    end
-
-    local resource = cfg.resource or 'node7-spawnselect'
-    return GetResourceState(resource) == 'started'
-end
-
-local function startSpawnSelector(result)
-    local cfg = getSpawnSelectorConfig()
-    if not cfg then return false end
-
-    local lastPosition = getPosition(result and result.position)
-    local defaultPosition = lastPosition or getPosition(Config.FirstSpawnPosition)
-
-    SpawnRequestToken = SpawnRequestToken + 1
-    local token = SpawnRequestToken
-    PendingSpawnContext = {
-        token = token,
-        result = result,
-        lastPosition = lastPosition,
-        defaultPosition = defaultPosition
-    }
-
-    closeUiOnly()
-    destroySelectorCamera()
-    DisplayRadar(false)
-
-    local payload = {
-        source = 'node7-charselect',
-        character = result and result.player or nil,
-        player = result and result.player or nil,
-        citizenid = result and result.player and result.player.citizenid or nil,
-        lastLocation = lastPosition,
-        defaultPosition = defaultPosition,
-        selectedEvent = cfg.returnEvent or 'node7-charselect:client:spawnSelected',
-        returnEvent = cfg.returnEvent or 'node7-charselect:client:spawnSelected',
-        cancelEvent = cfg.cancelEvent or 'node7-charselect:client:spawnCancelled',
-        spawns = getSpawnOptions(lastPosition),
-        options = getSpawnOptions(lastPosition)
-    }
-
-    local opened = tryOpenSpawnSelector(payload)
-    if not opened then
-        PendingSpawnContext = nil
-        return false
-    end
-
-    local timeout = tonumber(cfg.timeout) or 45000
-    if timeout > 0 then
-        SetTimeout(timeout, function()
-            if PendingSpawnContext and PendingSpawnContext.token == token then
-                print('^3[node7-charselect]^7 spawn selector timed out; falling back to last location')
-                PendingSpawnContext = nil
-                finishLoadedCharacter(result, defaultPosition)
-            end
-        end)
-    end
-
-    return true
-end
 
 local function handleLoadedCharacter(result)
     if not result or result.ok ~= true then return end
-
-    if shouldUseSpawnSelector(result) then
-        if startSpawnSelector(result) then return end
-    end
-
-    finishLoadedCharacter(result, result.position)
+    finishLoadedCharacter(result, result.position or Config.FirstSpawnPosition)
 end
 
 local function refreshCharacters()
@@ -776,11 +521,9 @@ function openMenu(force)
 
     UiOpen = true
     SetNuiFocus(true, true)
-    SendNUIMessage({ version = '3.0.0', loading = true })
     prepareSelectorScene()
     SendNUIMessage({ action = 'show', labels = Config.DefaultLabels or {} })
     refreshCharacters()
-    SendNUIMessage({ loading = false })
 end
 
 RegisterNetEvent('node7-charselect:client:open', function()
@@ -850,6 +593,11 @@ RegisterNUICallback('focus', function(_, cb)
 end)
 
 RegisterNUICallback('previewGender', function(data, cb)
+    if Config.PreviewPed and Config.PreviewPed.enabled == false then
+        cb({ ok = true, skipped = true })
+        return
+    end
+
     data = type(data) == 'table' and data or {}
     local ok, result = applyGenderModel(data.gender, true)
     local ped = PlayerPedId()

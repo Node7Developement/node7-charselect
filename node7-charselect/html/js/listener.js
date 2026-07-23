@@ -3,16 +3,43 @@ var labels = {};
 var pendingDelete = null;
 var activeCreateSlot = null;
 var activeSetupCitizenId = '';
+var busy = false;
 var resourceName = typeof GetParentResourceName === 'function' ? GetParentResourceName() : 'node7-charselect';
 
+function byId(id) { return document.getElementById(id); }
+
+function show(el) { if (el) el.style.display = 'block'; }
+function hide(el) { if (el) el.style.display = 'none'; }
+
+function setText(id, value) {
+    var el = byId(id);
+    if (el) el.textContent = value == null ? '' : String(value);
+}
+
+function setValue(id, value) {
+    var el = byId(id);
+    if (el) el.value = value == null ? '' : String(value);
+}
+
+function getValue(id) {
+    var el = byId(id);
+    return el && el.value ? String(el.value).replace(/^\s+|\s+$/g, '') : '';
+}
+
 function nuiPost(name, data, done) {
-    try {
-        $.post('https://' + resourceName + '/' + name, JSON.stringify(data || {}), function(response) {
-            if (done) done(response || {});
-        });
-    } catch (e) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', 'https://' + resourceName + '/' + name, true);
+    xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        var response = {};
+        try { response = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) { response = {}; }
+        if (done) done(response || {});
+    };
+    xhr.onerror = function() {
         if (done) done({ ok: false, error: 'NUI callback failed' });
-    }
+    };
+    xhr.send(JSON.stringify(data || {}));
 }
 
 function escapeHtml(value) {
@@ -20,27 +47,31 @@ function escapeHtml(value) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
+        .replace(/\"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
 
 function showMessage(text) {
-    var box = $('#message');
+    var box = byId('message');
+    if (!box) return;
     if (!text) {
-        box.hide().text('');
+        box.textContent = '';
+        hide(box);
         return;
     }
-    box.text(text).fadeIn(120);
-    setTimeout(function() { box.fadeOut(180); }, 4500);
+    box.textContent = text;
+    show(box);
+    setTimeout(function() { hide(box); }, 3500);
 }
 
-function setBusy(state, text) {
-    if (state) {
-        $('#busyText').text(text || 'Working...');
-        $('#busy').removeClass('hidden');
-    } else {
-        $('#busy').addClass('hidden');
-    }
+function setButtonsDisabled(state) {
+    var buttons = document.getElementsByTagName('button');
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = state === true;
+}
+
+function setBusy(state) {
+    busy = state === true;
+    setButtonsDisabled(busy);
 }
 
 function normalizeSlots(payload) {
@@ -52,7 +83,7 @@ function normalizeSlots(payload) {
     labels = payload.labels || labels || {};
     if (payload.slots) return payload.slots;
     if (payload.list) return payload.list;
-    if (Array.isArray(payload)) return payload;
+    if (Object.prototype.toString.call(payload) === '[object Array]') return payload;
     return [];
 }
 
@@ -71,14 +102,17 @@ function renderCharacter(slot, index) {
             '<div class="char empty" data-slot="' + escapeHtml(slotNumber) + '">' +
                 '<div class="char-content">' +
                     '<div class="slot-num">SLOT ' + escapeHtml(slotNumber) + '</div>' +
-                    '<div class="ctext">Create New Character</div>' +
-                    '<div class="actions"><button class="createnew" data-create="' + escapeHtml(slotNumber) + '">' + escapeHtml(labels.create || 'Create') + '</button></div>' +
+                    '<div class="ctext">Create Character</div>' +
+                    '<div class="actions"><button class="createnew" type="button" data-create="' + escapeHtml(slotNumber) + '">' + escapeHtml(labels.create || 'Create') + '</button></div>' +
                 '</div>' +
             '</div>';
     }
 
     var c = slot.character || {};
-    var name = c.name || ((c.firstname || 'Unknown') + ' ' + (c.lastname || 'Unknown'));
+    var charinfo = c.charinfo || {};
+    var first = c.firstname || charinfo.firstname || 'Unknown';
+    var last = c.lastname || charinfo.lastname || 'Unknown';
+    var name = c.name || (first + ' ' + last);
     var isSetup = c.requires_setup === true;
     return '' +
         '<div class="char" data-slot="' + escapeHtml(slotNumber) + '">' +
@@ -89,8 +123,8 @@ function renderCharacter(slot, index) {
                 '<div class="money">' + escapeHtml(c.job || 'unemployed') + '</div>' +
                 '<div class="gold">' + escapeHtml(moneyLine(c)) + '</div>' +
                 '<div class="actions">' +
-                    (isSetup ? '<button class="create" data-setup="' + escapeHtml(slotNumber) + '" data-citizenid="' + escapeHtml(c.citizenid || '') + '">' + escapeHtml(labels.setup || 'Setup') + '</button>' : '<button class="create" data-play="' + escapeHtml(c.citizenid || '') + '">' + escapeHtml(labels.play || 'Select') + '</button>') +
-                    '<button class="delete" data-delete="' + escapeHtml(c.citizenid || '') + '" data-name="' + escapeHtml(name) + '">' + escapeHtml(labels.delete || 'Delete') + '</button>' +
+                    (isSetup ? '<button class="create" type="button" data-setup="' + escapeHtml(slotNumber) + '" data-citizenid="' + escapeHtml(c.citizenid || '') + '">' + escapeHtml(labels.setup || 'Setup') + '</button>' : '<button class="create" type="button" data-play="' + escapeHtml(c.citizenid || '') + '">' + escapeHtml(labels.play || 'Play') + '</button>') +
+                    '<button class="delete" type="button" data-delete="' + escapeHtml(c.citizenid || '') + '" data-name="' + escapeHtml(name) + '">' + escapeHtml(labels.delete || 'Delete') + '</button>' +
                 '</div>' +
             '</div>' +
         '</div>';
@@ -99,15 +133,15 @@ function renderCharacter(slot, index) {
 function loadCharacters(payload) {
     slots = normalizeSlots(payload);
     var html = '';
-    for (var i = 0; i < slots.length; i++) {
-        html += renderCharacter(slots[i], i);
-    }
-    $('#characters').html(html);
-    $('#main').fadeIn(180);
+    for (var i = 0; i < slots.length; i++) html += renderCharacter(slots[i], i);
+    var list = byId('characters');
+    if (list) list.innerHTML = html;
+    show(byId('main'));
 }
 
 function refreshCharacters() {
-    setBusy(true, 'Loading characters...');
+    if (busy) return;
+    setBusy(true);
     nuiPost('refresh', {}, function(response) {
         setBusy(false);
         loadCharacters(response);
@@ -117,19 +151,17 @@ function refreshCharacters() {
 function openCreator(slot, citizenid) {
     activeCreateSlot = Number(slot || 1);
     activeSetupCitizenId = citizenid || '';
-    $('#slot').val(activeCreateSlot);
-    $('#citizenid').val(activeSetupCitizenId);
-    $('#creatorTitle').text(activeSetupCitizenId ? 'Finish Character Setup' : 'Create Character');
-    $('#createBtn').text(activeSetupCitizenId ? 'Save' : 'Create');
-    $('#name').val('');
-    $('#lastname').val('');
-    $('#birthdate').val('');
-    $('#gender').val('male');
-    $('#nationality').val('');
-    $('#backstory').val('');
-    $('#main').fadeOut(120);
-    $('#creator').fadeIn(140);
-    nuiPost('previewGender', { gender: 'male' });
+    setValue('slot', activeCreateSlot);
+    setValue('citizenid', activeSetupCitizenId);
+    setText('creatorTitle', activeSetupCitizenId ? 'Finish Character' : 'Create Character');
+    setText('createBtn', activeSetupCitizenId ? 'Save' : 'Create');
+    setValue('name', '');
+    setValue('lastname', '');
+    setValue('birthdate', '');
+    setValue('gender', 'male');
+    setValue('nationality', '');
+    setValue('backstory', '');
+    show(byId('creator'));
 }
 
 function createNewCharacter() {
@@ -137,83 +169,75 @@ function createNewCharacter() {
 }
 
 function confirmNewCharacter() {
-    var slot = Number($('#slot').val() || activeCreateSlot || 1);
-    var citizenid = $('#citizenid').val() || '';
+    if (busy) return;
+    var slot = Number(getValue('slot') || activeCreateSlot || 1);
+    var citizenid = getValue('citizenid');
     var charinfo = {
-        firstname: $.trim($('#name').val()),
-        lastname: $.trim($('#lastname').val()),
-        birthdate: $.trim($('#birthdate').val()),
-        gender: $('#gender').val() || 'male',
-        nationality: $.trim($('#nationality').val()),
-        backstory: $.trim($('#backstory').val())
+        firstname: getValue('name'),
+        lastname: getValue('lastname'),
+        birthdate: getValue('birthdate'),
+        gender: getValue('gender') || 'male',
+        nationality: getValue('nationality'),
+        backstory: getValue('backstory')
     };
 
     if (!charinfo.firstname || !charinfo.lastname || !charinfo.birthdate || !charinfo.nationality) {
-        showMessage('Fill out first name, last name, birthdate, and nationality.');
+        showMessage('Fill required fields.');
         return;
     }
 
-    $('#creator').fadeOut(120);
-    setBusy(true, citizenid ? 'Saving character...' : 'Creating character...');
+    hide(byId('creator'));
+    setBusy(true);
     nuiPost(citizenid ? 'finishSetup' : 'create', { slot: slot, citizenid: citizenid, charinfo: charinfo }, function(response) {
-        setBusy(false);
         if (!response || !response.ok) {
-            showMessage((response && response.error) || 'Character create failed');
-            $('#main').fadeIn(140);
+            setBusy(false);
+            showMessage((response && response.error) || 'Create failed');
+            show(byId('creator'));
         }
     });
 }
 
 function cancel() {
-    $('#creator').fadeOut(120);
-    $('#main').fadeIn(140);
+    hide(byId('creator'));
     nuiPost('cancelNew', {});
 }
 
 function selectByCitizen(citizenid) {
-    if (!citizenid) return;
-    $('#main').fadeOut(120);
-    setBusy(true, 'Loading last location...');
+    if (!citizenid || busy) return;
+    hide(byId('creator'));
+    setBusy(true);
     nuiPost('play', { citizenid: citizenid }, function(response) {
-        setBusy(false);
         if (!response || !response.ok) {
+            setBusy(false);
             showMessage((response && response.error) || 'Character load failed');
-            $('#main').fadeIn(140);
         }
     });
 }
 
-function select(id, pedid) {
-    var slot = slots[(Number(id) || 1) - 1];
-    var c = slot && slot.character;
-    if (c && c.citizenid) selectByCitizen(c.citizenid);
-}
-
 function confirmDelete(citizenid, name) {
+    if (busy) return;
     pendingDelete = citizenid;
-    $('#remover').html('' +
-        '<div id="pewien">Delete ' + escapeHtml(name || citizenid) + '? This action cannot be undone.</div>' +
-        '<button id="confirm">Confirm</button>' +
-        '<button id="cancelDeletion">Cancel</button>'
-    ).fadeIn(140);
-}
-
-function confirm(id) {
-    var slot = slots[(Number(id) || 1) - 1];
-    var c = slot && slot.character;
-    if (c && c.citizenid) confirmDelete(c.citizenid, c.name);
+    var box = byId('remover');
+    if (!box) return;
+    box.innerHTML = '' +
+        '<div id="pewien">Delete ' + escapeHtml(name || citizenid) + '?</div>' +
+        '<button id="confirm" type="button">Confirm</button>' +
+        '<button id="cancelDeletion" type="button">Cancel</button>';
+    show(box);
 }
 
 function cancelDeletion() {
     pendingDelete = null;
-    $('#remover').fadeOut(120).empty();
+    hide(byId('remover'));
+    var box = byId('remover');
+    if (box) box.innerHTML = '';
 }
 
-function delet(id) {
-    if (!pendingDelete) return;
+function deletePending() {
+    if (!pendingDelete || busy) return;
     var citizenid = pendingDelete;
     cancelDeletion();
-    setBusy(true, 'Deleting character...');
+    setBusy(true);
     nuiPost('delete', { citizenid: citizenid }, function(response) {
         setBusy(false);
         if (!response || !response.ok) {
@@ -224,79 +248,73 @@ function delet(id) {
     });
 }
 
-$(function() {
-    $('#main').hide();
-    $('#creator').hide();
-    $('#loading').hide();
-    $('#remover').hide();
+function handleCharacterClick(event) {
+    var target = event.target || event.srcElement;
+    while (target && target !== byId('characters') && String(target.tagName).toLowerCase() !== 'button') target = target.parentNode;
+    if (!target || target === byId('characters')) return;
 
-    $('#refresh').bind('click', refreshCharacters);
-    $('#createBtn').bind('click', confirmNewCharacter);
-    $('#cancelBtn').bind('click', cancel);
-    $('#gender').bind('change', function() {
-        nuiPost('previewGender', { gender: $(this).val() || 'male' });
-    });
+    if (target.getAttribute('data-create')) return openCreator(target.getAttribute('data-create'), '');
+    if (target.getAttribute('data-setup')) return openCreator(target.getAttribute('data-setup'), target.getAttribute('data-citizenid'));
+    if (target.getAttribute('data-play')) return selectByCitizen(target.getAttribute('data-play'));
+    if (target.getAttribute('data-delete')) return confirmDelete(target.getAttribute('data-delete'), target.getAttribute('data-name'));
+}
 
-    $('#characters').delegate('button', 'click', function() {
-        var btn = $(this);
-        if (btn.attr('data-create')) return openCreator(btn.attr('data-create'), '');
-        if (btn.attr('data-setup')) return openCreator(btn.attr('data-setup'), btn.attr('data-citizenid'));
-        if (btn.attr('data-play')) return selectByCitizen(btn.attr('data-play'));
-        if (btn.attr('data-delete')) return confirmDelete(btn.attr('data-delete'), btn.attr('data-name'));
-    });
+function handleRemoveClick(event) {
+    var target = event.target || event.srcElement;
+    if (!target || !target.id) return;
+    if (target.id === 'confirm') return deletePending();
+    if (target.id === 'cancelDeletion') return cancelDeletion();
+}
 
-    $('#characters').delegate('.char', 'mouseenter', function() {
-        nuiPost('previewSlot', { slot: Number($(this).attr('data-slot') || 1) });
-    });
+function hideAll() {
+    hide(byId('main'));
+    hide(byId('creator'));
+    hide(byId('remover'));
+    setBusy(false);
+}
 
-    $('#remover').delegate('#confirm', 'click', delet);
-    $('#remover').delegate('#cancelDeletion', 'click', cancelDeletion);
+window.addEventListener('message', function(event) {
+    var data = event.data || {};
 
-    window.addEventListener('message', function(event) {
-        var data = event.data || {};
+    if (data.action === 'show' || data.type === 3) {
+        labels = data.labels || labels || {};
+        show(byId('main'));
+        return;
+    }
 
-        if (data.version) {
-            $('#version').html('version ' + data.version);
-            setTimeout(function() { $('#loadingtext').html('Verifying character data...'); }, 1000);
-            setTimeout(function() { $('#loadingtext').html('Loading server data...'); }, 2800);
-            setTimeout(function() { $('#loadingtext').html('Starting scripts...'); }, 4400);
-        }
+    if (data.action === 'hide' || data.type === 2) {
+        hideAll();
+        return;
+    }
 
-        if (data.loading === true) {
-            var randomnum = Math.floor(Math.random() * 3) + 1;
-            $('#loadingPanel').css('background-image', 'url(rdr2' + randomnum + '.png)');
-            $('#loading').fadeIn(180);
-        }
 
-        if (data.loading === false) {
-            $('#loading').fadeOut(180);
-        }
+    if (data.action === 'setCharacters') {
+        loadCharacters(data.data);
+        return;
+    }
 
-        if (data.action === 'show' || data.type === 3) {
-            labels = data.labels || labels || {};
-            $('#body').show();
-            $('#main').fadeIn(180);
-        }
+    if (data.type === 1) {
+        loadCharacters(data.list);
+        return;
+    }
 
-        if (data.action === 'hide' || data.type === 2) {
-            $('#main').fadeOut(120);
-            $('#creator').fadeOut(120);
-            $('#remover').fadeOut(120);
-            setBusy(false);
-        }
+    if (data.new === true) createNewCharacter();
+});
 
-        if (data.action === 'setCharacters') {
-            loadCharacters(data.data);
-        }
+document.addEventListener('DOMContentLoaded', function() {
+    hideAll();
 
-        if (data.type === 1) {
-            loadCharacters(data.list);
-        }
+    var refresh = byId('refresh');
+    var createBtn = byId('createBtn');
+    var cancelBtn = byId('cancelBtn');
+    var chars = byId('characters');
+    var remover = byId('remover');
 
-        if (data.new === true) {
-            createNewCharacter();
-        }
-    });
+    if (refresh) refresh.addEventListener('click', refreshCharacters, false);
+    if (createBtn) createBtn.addEventListener('click', confirmNewCharacter, false);
+    if (cancelBtn) cancelBtn.addEventListener('click', cancel, false);
+    if (chars) chars.addEventListener('click', handleCharacterClick, false);
+    if (remover) remover.addEventListener('click', handleRemoveClick, false);
 
     nuiPost('ready', {});
 });

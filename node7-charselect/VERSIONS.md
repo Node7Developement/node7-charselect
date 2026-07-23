@@ -1,14 +1,26 @@
-# Versions
+# NODE7 Charselect Versions
+
+## 8.0.0
+- Removed spawn selector support completely.
+- Play/create now spawns directly from charselect.
+- Removed spawn handoff timeout and preparing flow.
+- Kept optimized RedEMRP-style assets and right-side creator panel.
+
+# node7-charselect Versions
+
+## 4.0.0
+- Right-side full character creation panel.
+- Play/create hands off to direct spawn after character load.
+- Spawn selector payload now includes safe character name/identity fields.
+- Retry handoff event from charselect if the spawn selector NUI misses the first open.
+- RedEMRP format/assets preserved.
 
 ## 3.0.0
+- Spawn selector bridge added.
 
-- Added proper `node7-spawnselect` support.
-- Play/Create/Finish Setup no longer block the NUI callback while spawning.
-- Added safe fallback to last location if spawn selector is missing or times out.
-- Added spawn selected/cancelled callback events.
-- Preserved uploaded RedEMRP charselect UI format/assets.
-- No SQL ownership and no font files.
 
-## 2.1.0
-
-- RedEMRP format/assets conversion.
+V9 clean direct-spawn notes:
+- spawnselect removed
+- clothing handoff removed
+- stable Rhodes character scene enabled
+- no loading/preparing text

@@ -13,7 +13,6 @@ ensure node7-skins
 Optional spawn selector before charselect:
 
 ```cfg
-ensure node7-spawnselect
 ```
 
 Then:
@@ -24,4 +23,11 @@ ensure node7-charselect
 
 No database import is required for this resource. Use `node7-players` for character persistence.
 
-Charselect does not hard-depend on `node7-spawnselect`. If the spawn selector is missing or times out, it uses the character saved position fallback.
+Charselect does not use a spawn selector. Play/create spawns directly at saved position or safe Valentine fallback.
+
+
+V9 clean direct-spawn notes:
+- spawnselect removed
+- clothing handoff removed
+- stable Rhodes character scene enabled
+- no loading/preparing text

@@ -3,60 +3,45 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NODE7 - Character Selection</title>
+    <title>NODE7 - Character Select</title>
     <link rel="stylesheet" href="style.css">
-    <script src="nui://game/ui/jquery.js" type="text/javascript"></script>
 </head>
 <body id="body">
-    <div class="bg" id="loading">
-        <div class="loading-panel" id="loadingPanel">
-            <div class="brand">NODE7</div>
-            <div class="loadingtext">WELCOME TO <span>NODE7</span></div>
-            <div class="loadingsubtext"><span id="version">Character Select</span><br><span id="loadingtext">Loading character data...</span></div>
-        </div>
-    </div>
-
-    <div id="remover"></div>
-
     <div id="main" class="main-wrap">
         <div class="topbar">
-            <div>
-                <div class="title">NODE7 CHARSELECT</div>
-                <div class="subtitle">Choose your character. Existing characters return to last location.</div>
-            </div>
-            <button id="refresh" class="refresh">Refresh</button>
+            <div class="title">NODE7 CHARSELECT</div>
+            <button id="refresh" class="refresh" type="button">Refresh</button>
         </div>
+
         <div id="characters" class="characters"></div>
         <div id="message" class="message"></div>
     </div>
 
-    <div id="creator">
-        <div class="creator-card">
+    <aside id="creator" class="creator-panel">
+        <div class="creator-head">
             <div class="creator-title" id="creatorTitle">Create Character</div>
-            <input type="hidden" id="slot" value="">
-            <input type="hidden" id="citizenid" value="">
-            <input type="text" id="name" placeholder="First Name..." required maxlength="50">
-            <input type="text" id="lastname" placeholder="Last Name..." required maxlength="50">
-            <input type="text" id="birthdate" placeholder="Birthdate YYYY-MM-DD" required maxlength="20">
-            <select id="gender" required>
-                <option value="male">Male</option>
-                <option value="female">Female</option>
-            </select>
-            <input type="text" id="nationality" placeholder="Nationality..." required maxlength="50">
-            <textarea id="backstory" placeholder="Backstory optional..." maxlength="500"></textarea>
-            <button id="createBtn" class="create2">Create</button>
-            <button id="cancelBtn" class="cancel2">Cancel</button>
+            <button id="cancelBtn" class="close-panel" type="button">Back</button>
         </div>
-    </div>
 
-    <div id="busy" class="busy hidden">
-        <img src="circle.gif" alt="Loading">
-        <span id="busyText">Working...</span>
-    </div>
+        <input type="hidden" id="slot" value="">
+        <input type="hidden" id="citizenid" value="">
 
-    <script src="js/jquery-1.4.1.min.js" type="text/javascript"></script>
-    <script src="js/jquery.jcarousel.pack.js" type="text/javascript"></script>
-    <script src="js/jquery-func.js" type="text/javascript"></script>
+        <div class="form-grid">
+            <label>First Name<input type="text" id="name" placeholder="Arthur" required maxlength="50" autocomplete="off"></label>
+            <label>Last Name<input type="text" id="lastname" placeholder="Morgan" required maxlength="50" autocomplete="off"></label>
+            <label>Birthdate<input type="text" id="birthdate" placeholder="1870-01-01" required maxlength="20" autocomplete="off"></label>
+            <label>Gender<select id="gender" required><option value="male">Male</option><option value="female">Female</option></select></label>
+            <label>Nationality<input type="text" id="nationality" placeholder="American" required maxlength="50" autocomplete="off"></label>
+            <label>Backstory<textarea id="backstory" placeholder="Optional" maxlength="500"></textarea></label>
+        </div>
+
+        <div class="creator-actions">
+            <button id="createBtn" class="create2" type="button">Create</button>
+        </div>
+    </aside>
+
+    <div id="remover"></div>
+
     <script src="js/listener.js" type="text/javascript"></script>
 </body>
 </html>
