@@ -6,7 +6,8 @@
 
 
 
-![Uploading CHARSELECT.PNG…]()
+<img width="1920" height="1080" alt="CHARSELECT" src="https://github.com/user-attachments/assets/11360237-fa02-477c-85a1-078fdcda31c3" />
+
 
 NODE7 character selection resource using the uploaded RedEMRP charselect UI format and image assets while keeping NODE7 persistence through `node7-players`.
 
