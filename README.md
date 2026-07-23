@@ -1,6 +1,13 @@
 [README.md](https://github.com/user-attachments/files/30317247/README.md)
 # node7-charselect
 
+
+
+
+
+
+![Uploading CHARSELECT.PNG…]()
+
 NODE7 character selection resource using the uploaded RedEMRP charselect UI format and image assets while keeping NODE7 persistence through `node7-players`.
 
 ## Start order
