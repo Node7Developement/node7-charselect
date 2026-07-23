@@ -9,46 +9,29 @@
 <img width="1920" height="1080" alt="CHARSELECT" src="https://github.com/user-attachments/assets/11360237-fa02-477c-85a1-078fdcda31c3" />
 
 
-NODE7 character selection resource using the uploaded RedEMRP charselect UI format and image assets while keeping NODE7 persistence through `node7-players`.
+# node7-charselect
 
-## Start order
+NODE7 character selector using the RedEMRP charselect format/assets with NODE7 player persistence.
 
-```cfg
-ensure node7-core
-ensure node7-players
-ensure node7-skins
-# optional, only if installed:
-ensure node7-spawnselect
-ensure node7-charselect
-```
+## Flow
 
-Do not run `node7-multicharacter` at the same time.
+1. Player opens charselect.
+2. Existing character: press Play.
+3. New character: use the right-side Create Full Character panel.
+4. Charselect loads the character through `node7-players`.
+5. Charselect opens `direct spawn`.
+6. Spawnselect returns the selected spawn to charselect.
+7. Charselect spawns the ped, applies `node7-skins`, then loads clothing if available.
 
-## Spawn selector support
+No SQL is owned by this resource. It uses `node7-players` for citizenid persistence.
 
-When `node7-spawnselect` is started, Play/Create/Finish Setup sends the loaded character into the spawn selector instead of spawning immediately.
 
-Expected spawn selector callback event:
+V9 clean direct-spawn notes:
+- spawnselect removed
+- clothing handoff removed
+- stable Rhodes character scene enabled
+- no loading/preparing text
 
-`node7-charselect:client:spawnSelected`
-
-Payload can be any of these formats:
-
-```lua
-{ id = 'valentine' }
-{ position = { x = -325.06, y = 773.62, z = 117.43, w = 286.0 } }
-{ coords = { x = -325.06, y = 773.62, z = 117.43, heading = 286.0 } }
-```
-
-Cancel event:
-
-`node7-charselect:client:spawnCancelled`
-
-If `node7-spawnselect` is not started or never responds, charselect falls back to the saved last location so Play never freezes.
-
-## Notes
-
-- No SQL is owned by this resource.
 - Characters are loaded/created through `node7-players`.
 - Skin loads through `node7-skins` during final spawn.
 - Clothing bridge tries started NODE7 clothing resources after spawn.
