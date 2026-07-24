@@ -1,33 +1,22 @@
-# Recipe Notes
+# NODE7 Charselect Recipe
 
-Resource name: `node7-charselect`
-
-Required resources before this:
+Start order:
 
 ```cfg
+ensure ox_lib
+ensure oxmysql
 ensure node7-core
-ensure node7-players
-ensure node7-skins
-```
-
-Optional spawn selector before charselect:
-
-```cfg
-```
-
-Then:
-
-```cfg
+ensure node7-appearance
 ensure node7-charselect
 ```
 
-No database import is required for this resource. Use `node7-players` for character persistence.
+`node7-charselect` uses the `players` table owned by `node7-core`.
 
-Charselect does not use a spawn selector. Play/create spawns directly at saved position or safe Valentine fallback.
+Do not run these with this resource:
 
-
-V9 clean direct-spawn notes:
-- spawnselect removed
-- clothing handoff removed
-- stable Rhodes character scene enabled
-- no loading/preparing text
+```cfg
+# ensure rsg-multicharacter
+# ensure rsg-spawn
+# ensure node7-multicharacter
+# ensure node7-spawnselect
+```

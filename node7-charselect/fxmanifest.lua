@@ -1,33 +1,37 @@
-fx_version 'cerulean'
+fx_version '1.0.13'
 game 'rdr3'
-
 rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'
 
 lua54 'yes'
 
 author 'NODE7 Development Studios'
-description 'NODE7 Charselect - optimized RedEMRP-style character selector with direct spawn'
-version '8.0.0'
+description 'NODE7 Charselect - polished multicharacter UI with last-location-only spawning and no ped preview'
+version '1.2.1'
 
-shared_script 'config.lua'
+ui_page 'html/index.html'
 
-client_script 'client/main.lua'
-server_script 'server/main.lua'
+shared_scripts {
+    'config.lua'
+}
 
-ui_page 'html/ui.html'
+client_scripts {
+    'client/main.lua'
+}
+
+server_scripts {
+    '@oxmysql/lib/MySQL.lua',
+    'server/main.lua'
+}
 
 files {
-    'html/ui.html',
+    'html/index.html',
+    'html/reset.css',
     'html/style.css',
-    'html/bg.png',
-    'html/circle.gif',
-    'html/rdr21.png',
-    'html/rdr22.png',
-    'html/rdr23.png',
-    'html/js/listener.js'
+    'html/script.js',
+    'html/assets/*.png'
 }
 
 dependencies {
-    'node7-core',
-    'node7-players'
+    'oxmysql',
+    'node7-core'
 }

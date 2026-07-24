@@ -1,2 +1,151 @@
 <!doctype html>
-<meta http-equiv="refresh" content="0; url=ui.html">
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>NODE7 Character Select</title>
+    <link rel="stylesheet" href="reset.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main id="app" class="app hidden">
+        <div class="ambient ambient-one"></div>
+        <div class="ambient ambient-two"></div>
+        <div class="grain"></div>
+
+        <section class="shell" aria-label="Character selection">
+            <header class="topbar">
+                <div class="brand">
+                    <div class="brand-mark" aria-hidden="true"><span>N7</span></div>
+                    <div>
+                        <p class="eyebrow">NODE7 DEVELOPMENT STUDIOS</p>
+                        <h1>Character Select</h1>
+                    </div>
+                </div>
+                <div class="topbar-meta">
+                    <span id="slotCounter" class="status-pill">0 / 4 Characters</span>
+                    <button id="disconnectButton" class="icon-action" type="button" aria-label="Disconnect">
+                        <span>Disconnect</span>
+                    </button>
+                </div>
+            </header>
+
+            <div class="workspace">
+                <aside class="slot-panel">
+                    <div class="section-heading">
+                        <div>
+                            <p class="eyebrow">YOUR ROSTER</p>
+                            <h2>Characters</h2>
+                        </div>
+                        <span class="section-index">01</span>
+                    </div>
+
+                    <div id="characterList" class="character-list"></div>
+
+                    <div class="slot-footer">
+                        <p>Select an occupied slot to continue, or choose an empty slot to begin a new story.</p>
+                    </div>
+                </aside>
+
+                <section class="content-panel">
+                    <div id="emptyPanel" class="view empty-view">
+                        <div class="empty-emblem" aria-hidden="true"><span>N7</span></div>
+                        <p class="eyebrow">AWAITING SELECTION</p>
+                        <h2>Choose a character slot</h2>
+                        <p class="lead">Character information and creation tools will appear here.</p>
+                    </div>
+
+                    <div id="infoPanel" class="view hidden" aria-label="Character information">
+                        <div class="view-header">
+                            <div>
+                                <p class="eyebrow">CHARACTER PROFILE</p>
+                                <h2 id="characterTitle">Character Details</h2>
+                                <p id="characterSubtitle" class="lead">Review this character before entering the world.</p>
+                            </div>
+                            <div id="characterInitials" class="profile-badge" aria-hidden="true">N7</div>
+                        </div>
+
+                        <div id="infoBody" class="detail-grid"></div>
+
+                        <div class="action-bar">
+                            <button id="deleteButton" class="button danger hidden" type="button" disabled>Delete Character</button>
+                            <button id="playButton" class="button primary" type="button" disabled>
+                                <span>Play Last Location</span>
+                                <span class="button-arrow" aria-hidden="true">→</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="createPanel" class="view hidden" aria-label="Create character">
+                        <div class="view-header">
+                            <div>
+                                <p class="eyebrow">NEW CHARACTER</p>
+                                <h2>Create Your Identity</h2>
+                                <p class="lead">Enter the core details. Appearance customization begins after spawning.</p>
+                            </div>
+                            <span id="createSlotBadge" class="slot-badge">Slot 1</span>
+                        </div>
+
+                        <div class="form-grid">
+                            <label class="field">
+                                <span>First Name</span>
+                                <input id="firstName" type="text" maxlength="50" autocomplete="off" placeholder="First name">
+                            </label>
+                            <label class="field">
+                                <span>Last Name</span>
+                                <input id="lastName" type="text" maxlength="50" autocomplete="off" placeholder="Last name">
+                            </label>
+                            <label class="field">
+                                <span>Birthdate</span>
+                                <input id="birthdate" type="date">
+                            </label>
+                            <label class="field">
+                                <span>Nationality</span>
+                                <input id="nationality" type="text" maxlength="50" value="American" autocomplete="off">
+                            </label>
+                            <label class="field field-wide">
+                                <span>Gender</span>
+                                <select id="gender">
+                                    <option value="male">Male</option>
+                                    <option value="female">Female</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="action-bar">
+                            <button id="createBackButton" class="button secondary" type="button">Back</button>
+                            <button id="createConfirmButton" class="button primary" type="button">
+                                <span>Create Character</span>
+                                <span class="button-arrow" aria-hidden="true">→</span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <footer class="footerbar">
+                <span>NODE7 CORE</span>
+                <span class="footer-divider"></span>
+                <span>Character persistence enabled</span>
+            </footer>
+        </section>
+
+        <section id="deletePanel" class="modal-backdrop hidden" aria-label="Delete character confirmation">
+            <div class="modal-card">
+                <div class="modal-icon" aria-hidden="true">!</div>
+                <p class="eyebrow">PERMANENT ACTION</p>
+                <h2>Delete this character?</h2>
+                <p id="deleteMessage">This character and associated progress will be permanently removed.</p>
+                <div class="modal-actions">
+                    <button id="deleteCancelButton" class="button secondary" type="button">Cancel</button>
+                    <button id="deleteConfirmButton" class="button danger" type="button">Delete Permanently</button>
+                </div>
+            </div>
+        </section>
+
+        <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    </main>
+    <script src="script.js"></script>
+</body>
+</html>

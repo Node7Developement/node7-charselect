@@ -1,22 +1,36 @@
 # node7-charselect
 
-NODE7 character selector using the RedEMRP charselect format/assets with NODE7 player persistence.
+NODE7 polished character selector with built-in character creation and last-location-only spawning.
 
-## Flow
+## Requirements
 
-1. Player opens charselect.
-2. Existing character: press Play.
-3. New character: use the right-side Create Full Character panel.
-4. Charselect loads the character through `node7-players`.
-5. Charselect opens `direct spawn`.
-6. Spawnselect returns the selected spawn to charselect.
-7. Charselect spawns the ped, applies `node7-skins`, then loads clothing if available.
+- `oxmysql`
+- `node7-core`
+- optional: `node7-appearance` for creator and saved appearance loading after spawn
 
-No SQL is owned by this resource. It uses `node7-players` for citizenid persistence.
+## Start order
 
+```cfg
+ensure ox_lib
+ensure oxmysql
+ensure node7-core
+ensure node7-appearance
+ensure node7-charselect
+```
 
-V9 clean direct-spawn notes:
-- spawnselect removed
-- clothing handoff removed
-- stable Rhodes character scene enabled
-- no loading/preparing text
+## Notes
+
+- Uses the `players` table through `node7-core`.
+- Existing characters always spawn at their persisted last location.
+- No horse dependency.
+- No `player_horses` table use.
+- No `rsg-core`, `rsg-spawn`, or `rsg-horses` runtime calls.
+- New characters use `DefaultSpawn` once, then continue from their persisted last location.
+- No preview ped is created or queried.
+- The actual player model and saved appearance are applied only after character selection and spawn.
+
+## v1.2.0
+
+- Rebuilt the NUI with a polished NODE7 layout.
+- Removed the preview ped, saved-preview queries, preview callbacks, and preview render loop.
+- Preserved character persistence, deletion, creation, last location, and post-spawn appearance loading.

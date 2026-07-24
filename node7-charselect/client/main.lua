@@ -1,50 +1,12 @@
-local Config = Node7CharSelectConfig or {}
-local UiOpen = false
-local SelectorCam = nil
-local IsSpawning = false
-local PedFrozen = false
-local openMenu
+local Config = Node7CharselectConfig or {}
 
-local PendingRequests = {}
-local RequestCounter = 0
-
-local function setPedFrozen(ped, state)
-    PedFrozen = state == true
-    FreezeEntityPosition(ped, PedFrozen)
-end
-
-local function isPedFrozen()
-    return PedFrozen == true
-end
-
-local function serverRequest(action, payload)
-    RequestCounter = RequestCounter + 1
-    if RequestCounter > 999999 then RequestCounter = 1 end
-
-    local requestId = RequestCounter
-    local p = promise.new()
-    PendingRequests[requestId] = p
-
-    TriggerServerEvent('node7-charselect:server:request', requestId, action, payload or {})
-
-    SetTimeout(tonumber(Config.RequestTimeout) or 12000, function()
-        if PendingRequests[requestId] then
-            PendingRequests[requestId] = nil
-            p:resolve({ ok = false, error = 'server request timed out' })
-        end
-    end)
-
-    return Citizen.Await(p)
-end
-
-RegisterNetEvent('node7-charselect:client:response', function(requestId, result)
-    requestId = tonumber(requestId)
-    local p = requestId and PendingRequests[requestId]
-    if not p then return end
-    PendingRequests[requestId] = nil
-    p:resolve(type(result) == 'table' and result or { ok = false, error = 'bad server response' })
-end)
-
+local uiOpen = false
+local selecting = false
+local camA = nil
+local camB = nil
+local pending = {}
+local requestId = 0
+local spawning = false
 
 local function debugPrint(message)
     if Config.Debug then
@@ -52,639 +14,441 @@ local function debugPrint(message)
     end
 end
 
-local function getPosition(position)
-    local fallback = Config.FirstSpawnPosition or { x = -277.76, y = 806.73, z = 119.38, w = 275.0 }
-    position = type(position) == 'table' and position or fallback
+local function nextRequest()
+    requestId = requestId + 1
+    if requestId > 999999 then requestId = 1 end
+    return requestId
+end
+
+local function vec(data, fallback)
+    data = type(data) == 'table' and data or fallback or {}
+    fallback = type(fallback) == 'table' and fallback or {}
     return {
-        x = tonumber(position.x) or tonumber(fallback.x) or -277.76,
-        y = tonumber(position.y) or tonumber(fallback.y) or 806.73,
-        z = tonumber(position.z) or tonumber(fallback.z) or 119.38,
-        w = tonumber(position.w or position.h or position.heading) or tonumber(fallback.w or fallback.h or fallback.heading) or 275.0,
-        fallback = position.fallback == true,
-        fallbackReason = position.fallbackReason
+        x = tonumber(data.x or data[1]) or tonumber(fallback.x) or -325.06,
+        y = tonumber(data.y or data[2]) or tonumber(fallback.y) or 773.62,
+        z = tonumber(data.z or data[3]) or tonumber(fallback.z) or 117.43,
+        w = tonumber(data.w or data.h or data.heading or data[4]) or tonumber(fallback.w or fallback.h or fallback.heading) or 286.0
     }
 end
 
-local function resolveGround(position)
-    if Config.GroundProbe == false or type(position) ~= 'table' then return position end
-
-    local ok, found, groundZ = pcall(function()
-        return GetGroundZFor_3dCoord(position.x, position.y, position.z + 50.0, false)
-    end)
-
-    if ok and found == true and type(groundZ) == 'number' and groundZ > -40.0 then
-        position.z = groundZ + 0.05
-    end
-
-    return position
+local function getScenePlayerPos()
+    return vec(Config.Scene and Config.Scene.player, { x = -562.91, y = -3776.25, z = 237.63, w = 90.0 })
 end
 
-local function getCurrentPosition()
-    local ped = PlayerPedId()
-    local coords = GetEntityCoords(ped)
-    return {
-        x = coords.x,
-        y = coords.y,
-        z = coords.z,
-        w = GetEntityHeading(ped)
-    }
-end
 
 local function normalizeGender(gender)
-    gender = tostring(gender or ''):lower():match('^%s*(.-)%s*$')
-    if gender == 'f' or gender == 'female' or gender == 'woman' then return 'female' end
+    local raw = tostring(gender or ''):lower():match('^%s*(.-)%s*$') or ''
+    if raw == 'female' or raw == 'woman' or raw == 'f' or raw == '0' then return 'female' end
     return 'male'
 end
 
-local function getGenderModel(gender)
-    gender = normalizeGender(gender)
-    local models = Config.GenderModels or {}
-    local model = models[gender]
-    if not model or model == '' then
-        model = gender == 'female' and 'mp_female' or 'mp_male'
-    end
-    return gender, model
+local function genderModel(gender)
+    return normalizeGender(gender) == 'female' and 'mp_female' or 'mp_male'
 end
 
-local function loadPedModel(model)
+local function loadModel(model)
     local hash = type(model) == 'number' and model or GetHashKey(tostring(model))
-
-    local exists = true
-    local okCd = pcall(function()
-        exists = IsModelInCdimage(hash)
-    end)
+    local okCd, exists = pcall(IsModelInCdimage, hash)
     if okCd and exists == false then return false, 'model_not_found' end
-
     RequestModel(hash)
-    local timeout = GetGameTimer() + (tonumber(Config.ModelLoadTimeout) or 10000)
+    local timeout = GetGameTimer() + 10000
     while not HasModelLoaded(hash) and GetGameTimer() < timeout do
         RequestModel(hash)
         Wait(0)
     end
-
     if not HasModelLoaded(hash) then return false, 'model_load_timeout' end
     return true, hash
 end
 
-local function updatePedVariation(ped)
+local function updatePed(ped)
     if not ped or ped == 0 or not DoesEntityExist(ped) then return end
-
-    if Config.ApplyRandomOutfitVariation ~= false then
-        -- 0x283978A15512B2FE = _SET_RANDOM_OUTFIT_VARIATION
-        pcall(function()
-            Citizen.InvokeNative(0x283978A15512B2FE, ped, true)
-        end)
-    end
-
-    -- 0xCC8CA3E88256E58F = _UPDATE_PED_VARIATION
-    pcall(function()
-        Citizen.InvokeNative(0xCC8CA3E88256E58F, ped, false, true, true, true, false)
-    end)
+    pcall(function() Citizen.InvokeNative(0x704C908E9C405136, ped) end)
+    pcall(function() Citizen.InvokeNative(0xAAB86462966168CE, ped, true) end)
+    pcall(function() Citizen.InvokeNative(0xCC8CA3E88256E58F, ped, 0, true, true, true, false) end)
+    pcall(function() Citizen.InvokeNative(0x283978A15512B2FE, ped, true) end)
 end
 
-local function repairPedVisibility(ped)
+local function forceVisible(ped)
+    ped = ped or PlayerPedId()
     if not ped or ped == 0 then return end
-
-    SetEntityVisible(ped, true)
+    SetEntityVisible(ped, true, false)
     SetEntityAlpha(ped, 255, false)
     ResetEntityAlpha(ped)
-    updatePedVariation(ped)
+    SetEntityCollision(ped, true, true)
+    updatePed(ped)
+end
 
-    for _ = 1, 20 do
-        if DoesEntityExist(ped) then
-            SetEntityVisible(ped, true)
-            SetEntityAlpha(ped, 255, false)
-            ResetEntityAlpha(ped)
-        end
+local function applyShopItem(ped, hash)
+    if not ped or ped == 0 or not DoesEntityExist(ped) or not hash then return end
+    local ok = pcall(function() ApplyShopItemToPed(ped, hash, true, true, true) end)
+    if not ok then
+        pcall(function() Citizen.InvokeNative(0xD3A7B003ED343FD9, ped, hash, true, true, true) end)
+    end
+end
+
+local function applyBaseBody(ped, gender)
+    if not ped or ped == 0 or not DoesEntityExist(ped) then return end
+    local male = normalizeGender(gender) ~= 'female'
+    local parts = male and {
+        0x158CB7F2, -- head
+        361562633, -- hair
+        62321923,  -- hands
+        3550965899, -- legs
+        612262189, -- eyes
+        319152566,
+        0x2CD2CB71, -- shirt
+        0x151EAB71, -- boots
+        0x1A6D27DD  -- pants
+    } or {
+        0x1E6FDDFB, -- head
+        272798698, -- hair
+        869083847, -- eyes
+        736263364, -- hands
+        0x193FCEC4, -- shirt
+        0x285F3566, -- pants
+        0x134D7E03  -- boots
+    }
+    for _, hash in ipairs(parts) do
+        applyShopItem(ped, hash)
         Wait(0)
     end
+    forceVisible(ped)
 end
 
-local function applyGenderModel(gender, keepCurrentPosition)
-    local normalized, model = getGenderModel(gender)
-    local ok, hashOrError = loadPedModel(model)
-    if not ok then
-        debugPrint(('Gender model failed for %s/%s: %s'):format(tostring(normalized), tostring(model), tostring(hashOrError)))
-        return false, hashOrError
-    end
+local function setPlayerModel(gender)
+    local model = genderModel(gender)
+    local ok, hashOrError = loadModel(model)
+    if not ok then return false, hashOrError end
 
-    local oldPed = PlayerPedId()
-    local coords = GetEntityCoords(oldPed)
-    local heading = GetEntityHeading(oldPed)
-    local frozen = isPedFrozen()
-    local invincible = GetPlayerInvincible(PlayerId())
-
-    local applied = pcall(function()
-        SetPlayerModel(PlayerId(), hashOrError, false)
-    end)
+    local applied = pcall(function() SetPlayerModel(PlayerId(), hashOrError, false) end)
     if not applied then
-        applied = pcall(function()
-            SetPlayerModel(PlayerId(), hashOrError)
-        end)
+        applied = pcall(function() Citizen.InvokeNative(0xED40380076A31506, PlayerId(), hashOrError, false) end)
     end
-
+    if not applied then
+        applied = pcall(function() SetPlayerModel(PlayerId(), hashOrError) end)
+    end
     if not applied then return false, 'set_player_model_failed' end
 
-    Wait(250)
+    Wait(350)
+    pcall(SetModelAsNoLongerNeeded, hashOrError)
     local ped = PlayerPedId()
-    pcall(function() SetModelAsNoLongerNeeded(hashOrError) end)
-    updatePedVariation(ped)
-    repairPedVisibility(ped)
-
-    if keepCurrentPosition then
-        SetEntityCoords(ped, coords.x, coords.y, coords.z, false, false, false, false)
-        SetEntityHeading(ped, heading)
-        repairPedVisibility(ped)
-        SetEntityInvincible(ped, invincible)
-        setPedFrozen(ped, frozen)
-    else
-        repairPedVisibility(ped)
-    end
-
-    LocalPlayer.state:set('node7GenderModel', normalized, true)
-    return true, normalized
-end
-
-local SkinApplyPromise = nil
-
-local function resolveSkinApply(status)
-    if SkinApplyPromise then
-        local p = SkinApplyPromise
-        SkinApplyPromise = nil
-        p:resolve(status or { ok = true })
-    end
-end
-
-RegisterNetEvent('node7-skins:client:appliedSkin', function(data)
-    resolveSkinApply({ ok = true, applied = true, data = data })
-end)
-
-RegisterNetEvent('node7-skins:client:noSkin', function()
-    resolveSkinApply({ ok = true, applied = false, missing = true })
-end)
-
-local function getResultPlayer(result)
-    return type(result) == 'table' and type(result.player) == 'table' and result.player or nil
-end
-
-local function getPlayerGender(player)
-    local charinfo = type(player) == 'table' and type(player.charinfo) == 'table' and player.charinfo or nil
-    return charinfo and (charinfo.gender or charinfo.sex) or nil
-end
-
-
-
-local function waitForSkinApply(player, openIfMissing)
-    local skinConfig = Config.Skins or {}
-    if skinConfig.enabled == false then
-        return { ok = true, skipped = true, reason = 'disabled' }
-    end
-
-    local resource = skinConfig.resource or 'node7-skins'
-    if GetResourceState(resource) ~= 'started' then
-        if skinConfig.FallbackToGenderModelWhenMissing ~= false then
-            applyGenderModel(getPlayerGender(player), true)
-        end
-        return { ok = true, skipped = true, reason = 'resource_not_started' }
-    end
-
-    if SkinApplyPromise then
-        resolveSkinApply({ ok = false, cancelled = true })
-    end
-
-    local p = promise.new()
-    SkinApplyPromise = p
-
-    TriggerEvent(skinConfig.clientEvent or 'node7-skins:client:loadSkin', openIfMissing == true)
-
-    SetTimeout(tonumber(skinConfig.timeout) or tonumber(skinConfig.waitMs) or 5000, function()
-        if SkinApplyPromise == p then
-            SkinApplyPromise = nil
-            p:resolve({ ok = false, timeout = true })
-        end
-    end)
-
-    local result = Citizen.Await(p)
-    result = type(result) == 'table' and result or { ok = false }
-
-    if (result.missing or result.timeout or result.cancelled) and skinConfig.FallbackToGenderModelWhenMissing ~= false then
-        applyGenderModel(getPlayerGender(player), true)
-    end
-
-    return result
-end
-
-local function applyPlayerModelFromResult(result, keepCurrentPosition)
-    local player = getResultPlayer(result)
-    local skinConfig = Config.Skins or {}
-
-    if skinConfig.applyBeforeSpawn ~= false then
-        local openIfMissing = false
-        if (result.created == true or result.setup == true) and skinConfig.openCreatorOnFirstCreate == true then
-            openIfMissing = true
-        end
-
-        local skinResult = waitForSkinApply(player, openIfMissing)
-        if skinResult and skinResult.applied then
-            return true, 'skin_applied'
-        end
-    end
-
-    if skinConfig.FallbackToGenderModelWhenMissing == false then
-        return true, 'skin_skipped_no_model_swap'
-    end
-
-    return applyGenderModel(getPlayerGender(player), keepCurrentPosition)
-end
-
-local function applyPostSpawnLayers(_result)
-    local clothingConfig = Config.Clothing or Config.TailorShops or {}
-    if clothingConfig.enabled == false then return end
-
-    local delay = tonumber(clothingConfig.delayAfterSpawn) or 750
-    SetTimeout(delay, function()
-        local resources = clothingConfig.resources
-        if type(resources) == 'table' then
-            for _, entry in ipairs(resources) do
-                local resource = entry and entry.resource
-                local event = entry and entry.event
-                if resource and event and GetResourceState(resource) == 'started' then
-                    TriggerEvent(event)
-                    return
-                end
-            end
-        end
-
-        local resource = clothingConfig.resource or 'node7-clothing'
-        if GetResourceState(resource) == 'started' then
-            TriggerEvent(clothingConfig.clientEvent or 'node7-clothing:client:loadSavedClothing')
-        end
-    end)
-end
-
-local function hideRadar()
-    DisplayRadar(false)
-end
-
-local function createSelectorCamera()
-    if not Config.Camera or Config.Camera.enabled == false then return end
-    if SelectorCam then return end
-
-    local cam = Config.Camera
-    SelectorCam = CreateCam('DEFAULT_SCRIPTED_CAMERA', true)
-    SetCamCoord(SelectorCam, cam.x or -281.55, cam.y or 812.10, cam.z or 121.25)
-    SetCamRot(SelectorCam, cam.rotationX or -8.0, cam.rotationY or 0.0, cam.rotationZ or 205.0, 2)
-    SetCamFov(SelectorCam, cam.fov or 45.0)
-    SetCamActive(SelectorCam, true)
-    RenderScriptCams(true, true, 500, true, true)
-end
-
-local function destroySelectorCamera()
-    if SelectorCam then
-        RenderScriptCams(false, true, 500, true, true)
-        DestroyCam(SelectorCam, false)
-        SelectorCam = nil
-    end
-end
-
-
-local ActiveSceneIndex = tonumber(Config.CharScene) or tonumber(Config.DefaultCharScene) or 4
-
-local function getSceneSlot(slot)
-    slot = tonumber(slot) or 1
-    local scenes = Config.CharScenes
-    if type(scenes) ~= 'table' then return nil end
-    local sceneSet = scenes[ActiveSceneIndex] or scenes[1]
-    if type(sceneSet) ~= 'table' then return nil end
-    return sceneSet[slot], sceneSet
-end
-
-local function applySceneSlot(slot)
-    local charscene, sceneSet = getSceneSlot(slot)
-    if type(charscene) ~= 'table' then return false end
-
-    local ped = PlayerPedId()
-    if charscene.PedCoord then
-        ClearPedTasksImmediately(ped)
-        SetEntityCoords(ped, charscene.PedCoord.x, charscene.PedCoord.y, charscene.PedCoord.z, false, false, false, false)
-        SetEntityHeading(ped, charscene.PedCoord.w or 0.0)
-        setPedFrozen(ped, true)
-        SetEntityInvincible(ped, true)
-        repairPedVisibility(ped)
-    elseif sceneSet and sceneSet.MainPedCoord then
-        SetEntityCoords(ped, sceneSet.MainPedCoord.x, sceneSet.MainPedCoord.y, sceneSet.MainPedCoord.z, false, false, false, false)
-    end
-
-    local scenario = charscene.Scenario
-    if not scenario then
-        if IsPedMale(ped) then
-            scenario = charscene.ScenarioMale
-        else
-            scenario = charscene.ScenarioFemale
-        end
-    end
-    if scenario then
-        pcall(function()
-            TaskStartScenarioInPlace(ped, scenario, -1, true, false, false, false)
-        end)
-    end
-
-    if SelectorCam and charscene.CamCoord then
-        SetCamCoord(SelectorCam, charscene.CamCoord.x, charscene.CamCoord.y, charscene.CamCoord.z)
-        SetCamRot(SelectorCam, 0.0, 0.0, charscene.CamCoord.w or 0.0, 2)
-        if charscene.PointCam then
-            PointCamAtCoord(SelectorCam, charscene.PointCam.x, charscene.PointCam.y, charscene.PointCam.z)
-        elseif charscene.PedCoord then
-            PointCamAtCoord(SelectorCam, charscene.PedCoord.x, charscene.PedCoord.y, charscene.PedCoord.z + 1.0)
-        end
-        if charscene.CamFov then SetCamFov(SelectorCam, charscene.CamFov) end
-    end
-
+    applyBaseBody(ped, gender)
+    forceVisible(ped)
     return true
 end
 
-local function prepareSelectorScene()
+local function destroyCams()
+    RenderScriptCams(false, true, 250, true, true)
+    if camA and DoesCamExist(camA) then DestroyCam(camA, true) end
+    if camB and DoesCamExist(camB) then DestroyCam(camB, true) end
+    camA = nil
+    camB = nil
+    ClearTimecycleModifier()
+end
+
+local function createCams()
+    destroyCams()
+    local scene = Config.Scene or {}
+    local intro = scene.introCam or {}
+    local fixed = scene.fixedCam or {}
+
+    camA = CreateCam('DEFAULT_SCRIPTED_CAMERA', true)
+    SetCamCoord(camA, intro.x or -555.925, intro.y or -3778.709, intro.z or 238.597)
+    SetCamRot(camA, intro.rx or -20.0, intro.ry or 0.0, intro.rz or 83.0, 2)
+    SetCamFov(camA, intro.fov or 30.0)
+    SetCamActive(camA, true)
+
+    camB = CreateCam('DEFAULT_SCRIPTED_CAMERA', true)
+    SetCamCoord(camB, fixed.x or -561.206, fixed.y or -3776.224, fixed.z or 239.597)
+    SetCamRot(camB, fixed.rx or -20.0, fixed.ry or 0.0, fixed.rz or 270.0, 2)
+    SetCamFov(camB, fixed.fov or 30.0)
+    SetCamActive(camB, true)
+
+    RenderScriptCams(true, false, 1, true, true)
+    SetCamActiveWithInterp(camB, camA, 900, true, true)
+    SetTimecycleModifier('default')
+end
+
+local function closeUi()
+    uiOpen = false
+    SetNuiFocus(false, false)
+    SendNUIMessage({ action = 'close' })
+end
+
+local function prepareScene()
+    selecting = true
     local ped = PlayerPedId()
-    local pos = getPosition(Config.SelectorPosition)
+    local pos = getScenePlayerPos()
 
-    if Config.PreviewPed == nil or Config.PreviewPed.enabled ~= false then
-        applyGenderModel(Config.PreviewPed.defaultGender or 'male', false)
-        ped = PlayerPedId()
-    end
-
-    setPedFrozen(ped, true)
-    if Config.PreviewPed == nil or Config.PreviewPed.visible ~= false then
-        repairPedVisibility(ped)
-    else
-        SetEntityVisible(ped, false)
-    end
-    SetEntityInvincible(ped, true)
+    DoScreenFadeOut(150)
+    Wait(250)
     RequestCollisionAtCoord(pos.x, pos.y, pos.z)
     SetEntityCoords(ped, pos.x, pos.y, pos.z, false, false, false, false)
     SetEntityHeading(ped, pos.w)
-    createSelectorCamera()
-    applySceneSlot(1)
-    hideRadar()
+    FreezeEntityPosition(ped, true)
+    SetEntityInvincible(ped, true)
+    SetEntityVisible(ped, false, false)
+    SetEntityCollision(ped, false, false)
+    DisplayRadar(false)
+    createCams()
+    ShutdownLoadingScreen()
+    ShutdownLoadingScreenNui()
+    DoScreenFadeIn(400)
 end
 
-local function closeUiOnly()
-    UiOpen = false
-    SetNuiFocus(false, false)
-    SendNUIMessage({ action = 'hide' })
+local function getLastLocation(playerData)
+    local defaultSpawn = vec(Config.DefaultSpawn, { x = -325.06, y = 773.62, z = 117.43, w = 286.0 })
+
+    if type(playerData) == 'table' and type(playerData.position) == 'table' then
+        return vec(playerData.position, defaultSpawn)
+    end
+
+    return defaultSpawn
 end
 
-local function spawnAt(position)
-    if IsSpawning then return end
-    IsSpawning = true
+local function resolveGround(pos)
+    local ok, found, groundZ = pcall(function()
+        return GetGroundZFor_3dCoord(pos.x, pos.y, pos.z + 80.0, false)
+    end)
+    if ok and found and type(groundZ) == 'number' and groundZ > -100.0 then
+        pos.z = groundZ + 0.05
+    end
+    return pos
+end
 
+local function triggerAppearanceLoad(created)
+    CreateThread(function()
+        Wait(created and 700 or 450)
+        if created and Config.OpenAppearanceForNewCharacters ~= false then
+            if GetResourceState(Config.AppearanceResource or 'node7-appearance') == 'started' then
+                TriggerEvent('node7-appearance:client:openCreator')
+                return
+            end
+            if GetResourceState(Config.SkinsResource or 'node7-skins') == 'started' then
+                TriggerEvent('node7-skins:client:openCreator')
+                return
+            end
+        end
+
+        if Config.LoadSavedSkinOnSpawn ~= false then
+            if GetResourceState(Config.AppearanceResource or 'node7-appearance') == 'started' then
+                TriggerServerEvent('node7-appearance:server:loadSaved')
+                return
+            end
+            if GetResourceState(Config.SkinsResource or 'node7-skins') == 'started' then
+                TriggerServerEvent('node7-skins:server:loadSkin', false)
+            end
+        end
+    end)
+end
+
+local function finishSpawn(playerData, created)
+    if spawning then return end
+    spawning = true
+
+    playerData = type(playerData) == 'table' and playerData or {}
+    local gender = playerData.charinfo and playerData.charinfo.gender or 'male'
+    local pos = resolveGround(getLastLocation(playerData))
+
+    DoScreenFadeOut(Config.FadeOutMs or 250)
+    local fadeTimeout = GetGameTimer() + 3000
+    while not IsScreenFadedOut() and GetGameTimer() < fadeTimeout do Wait(0) end
+
+    closeUi()
+    selecting = false
+    destroyCams()
+
+    setPlayerModel(gender)
     local ped = PlayerPedId()
-    local pos = resolveGround(getPosition(position))
-
-    DoScreenFadeOut(350)
-    local timeout = GetGameTimer() + 3500
-    while not IsScreenFadedOut() and GetGameTimer() < timeout do Wait(0) end
-
-    closeUiOnly()
-    destroySelectorCamera()
-
     RequestCollisionAtCoord(pos.x, pos.y, pos.z)
-    SetEntityCoords(ped, pos.x, pos.y, pos.z + 0.05, false, false, false, false)
+    SetEntityCoords(ped, pos.x, pos.y, pos.z, false, false, false, false)
     SetEntityHeading(ped, pos.w)
-    repairPedVisibility(ped)
+    FreezeEntityPosition(ped, true)
     SetEntityInvincible(ped, false)
-    setPedFrozen(ped, true)
+    SetEntityCollision(ped, true, true)
+    forceVisible(ped)
 
-    local collisionTimeout = GetGameTimer() + 6000
-    while not HasCollisionLoadedAroundEntity(ped) and GetGameTimer() < collisionTimeout do
+    local timeout = GetGameTimer() + 6000
+    while not HasCollisionLoadedAroundEntity(ped) and GetGameTimer() < timeout do
         RequestCollisionAtCoord(pos.x, pos.y, pos.z)
         Wait(0)
     end
 
-    setPedFrozen(ped, false)
+    FreezeEntityPosition(ped, false)
+    ClearPedTasksImmediately(ped)
+    forceVisible(ped)
     DisplayRadar(true)
+    DoScreenFadeIn(Config.FadeInMs or 650)
 
-    if pos.fallback and pos.fallbackReason then
-        TriggerEvent('chat:addMessage', {
-            color = { 212, 175, 55 },
-            args = { 'Node7', pos.fallbackReason }
-        })
+    TriggerServerEvent('node7-charselect:server:savePosition', { x = pos.x, y = pos.y, z = pos.z, w = pos.w })
+    TriggerEvent('node7-charselect:client:spawned', pos, playerData)
+    TriggerEvent('Node7Core:Client:OnPlayerLoaded')
+    TriggerEvent('node7-core:client:playerLoaded', playerData)
+    triggerAppearanceLoad(created == true)
+
+    if LocalPlayer and LocalPlayer.state then
+        LocalPlayer.state:set('node7CharselectActive', false, false)
+        LocalPlayer.state:set('isLoggedIn', true, false)
     end
 
-    DoScreenFadeIn(600)
-    TriggerEvent('node7-charselect:client:spawned', pos)
-    TriggerEvent('node7-charselect:client:characterLoaded', pos)
-    IsSpawning = false
+    spawning = false
 end
 
+local function serverRequest(kind, ...)
+    local id = nextRequest()
+    local p = promise.new()
+    pending[id] = p
 
-local function finishLoadedCharacter(result, position)
-    CreateThread(function()
-        result = type(result) == 'table' and result or {}
-        position = type(position) == 'table' and position or result.position
+    if kind == 'characters' then
+        TriggerServerEvent('node7-charselect:server:requestCharacters', id)
+    elseif kind == 'create' then
+        TriggerServerEvent('node7-charselect:server:createCharacter', id, ...)
+    elseif kind == 'select' then
+        TriggerServerEvent('node7-charselect:server:selectCharacter', id, ...)
+    elseif kind == 'delete' then
+        TriggerServerEvent('node7-charselect:server:deleteCharacter', id, ...)
+    end
 
-        local ok, err = pcall(function()
-            applyPlayerModelFromResult(result, true)
-            spawnAt(position)
-            -- Clothing is intentionally not opened or loaded by charselect.
-        end)
-
-        if not ok then
-            print(('^1[node7-charselect]^7 final spawn failed: %s'):format(tostring(err)))
-            IsSpawning = false
-            closeUiOnly()
-            destroySelectorCamera()
-            local ped = PlayerPedId()
-            repairPedVisibility(ped)
-            SetEntityInvincible(ped, false)
-            setPedFrozen(ped, false)
-            DisplayRadar(true)
-            DoScreenFadeIn(350)
+    SetTimeout(10000, function()
+        if pending[id] then
+            pending[id] = nil
+            p:resolve({ ok = false, error = 'server_timeout' })
         end
     end)
+
+    return Citizen.Await(p)
 end
 
+RegisterNetEvent('node7-charselect:client:characters', function(id, characters, slots, error)
+    local result = { ok = error == nil, characters = characters or {}, slots = slots or Config.DefaultNumberOfCharacters or 4, error = error }
+    if id and id ~= 0 and pending[id] then
+        local p = pending[id]
+        pending[id] = nil
+        p:resolve(result)
+        return
+    end
+    SendNUIMessage({ action = 'characters', characters = result.characters, slots = result.slots, error = result.error })
+end)
 
-local function handleLoadedCharacter(result)
-    if not result or result.ok ~= true then return end
-    finishLoadedCharacter(result, result.position or Config.FirstSpawnPosition)
-end
+RegisterNetEvent('node7-charselect:client:createResult', function(id, ok, data)
+    if not pending[id] then return end
+    local p = pending[id]
+    pending[id] = nil
+    p:resolve({ ok = ok == true, character = ok and data or nil, error = ok and nil or tostring(data) })
+end)
 
-local function refreshCharacters()
-    local result = serverRequest('getCharacters', {})
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
-    SendNUIMessage({ action = 'setCharacters', data = result, type = 1, list = result })
-    return result
-end
+RegisterNetEvent('node7-charselect:client:selectResult', function(id, ok, playerData, created)
+    if not pending[id] then return end
+    local p = pending[id]
+    pending[id] = nil
+    if ok == true then
+        p:resolve({ ok = true, player = playerData, created = created == true })
+    else
+        p:resolve({ ok = false, error = tostring(playerData) })
+    end
+end)
 
-function openMenu(force)
-    if UiOpen and not force then return end
+RegisterNetEvent('node7-charselect:client:deleteResult', function(id, ok, err)
+    if not pending[id] then return end
+    local p = pending[id]
+    pending[id] = nil
+    p:resolve({ ok = ok == true, error = ok and nil or tostring(err) })
+end)
 
-    UiOpen = true
+
+local function openCharselect()
+    if uiOpen then return end
+    if LocalPlayer and LocalPlayer.state then
+        LocalPlayer.state:set('node7Loaded', true, false)
+        LocalPlayer.state:set('node7CharselectActive', true, false)
+        LocalPlayer.state:set('isLoggedIn', false, false)
+    end
+    uiOpen = true
+    prepareScene()
     SetNuiFocus(true, true)
-    prepareSelectorScene()
-    SendNUIMessage({ action = 'show', labels = Config.DefaultLabels or {} })
-    refreshCharacters()
+    SendNUIMessage({
+        action = 'open',
+        slots = Config.DefaultNumberOfCharacters or 4
+    })
+    TriggerServerEvent('node7-charselect:server:beginSelection')
 end
 
-RegisterNetEvent('node7-charselect:client:open', function()
-    openMenu(true)
-end)
-
--- Compatibility for older NODE7 resources still calling the old multicharacter name.
-RegisterNetEvent('node7-multicharacter:client:open', function()
-    openMenu(true)
-end)
+RegisterNetEvent('node7-charselect:client:chooseChar', openCharselect)
+RegisterNetEvent('node7-charselect:client:open', openCharselect)
+RegisterNetEvent('node7-multicharacter:client:chooseChar', openCharselect)
+RegisterNetEvent('node7-multicharacter:client:open', openCharselect)
 
 RegisterNUICallback('ready', function(_, cb)
     cb({ ok = true })
 end)
 
 RegisterNUICallback('refresh', function(_, cb)
-    local result = refreshCharacters()
+    cb(serverRequest('characters'))
+end)
+
+
+RegisterNUICallback('createCharacter', function(data, cb)
+    local result = serverRequest('create', data or {})
     cb(result)
 end)
 
-RegisterNUICallback('play', function(data, cb)
-    local result = serverRequest('playCharacter', data or {})
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
-    cb(result)
-    if result.ok then
-        CreateThread(function()
-            Wait(0)
-            handleLoadedCharacter(result)
-        end)
-    end
-end)
-
-RegisterNUICallback('create', function(data, cb)
-    local result = serverRequest('createCharacter', data or {})
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
+RegisterNUICallback('selectCharacter', function(data, cb)
+    data = type(data) == 'table' and data or {}
+    local result = serverRequest('select', data.citizenid)
     cb(result)
     if result.ok then
         CreateThread(function()
             Wait(0)
-            handleLoadedCharacter(result)
+            finishSpawn(result.player, result.created)
         end)
     end
 end)
 
-RegisterNUICallback('finishSetup', function(data, cb)
-    local result = serverRequest('finishSetup', data or {})
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
-    cb(result)
+RegisterNUICallback('deleteCharacter', function(data, cb)
+    data = type(data) == 'table' and data or {}
+    local result = serverRequest('delete', data.citizenid)
     if result.ok then
-        CreateThread(function()
-            Wait(0)
-            handleLoadedCharacter(result)
-        end)
+        local chars = serverRequest('characters')
+        SendNUIMessage({ action = 'characters', characters = chars.characters or {}, slots = chars.slots or Config.DefaultNumberOfCharacters or 4 })
     end
-end)
-
-RegisterNUICallback('delete', function(data, cb)
-    local result = serverRequest('deleteCharacter', data or {})
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
-    if result.ok then refreshCharacters() end
     cb(result)
 end)
 
-RegisterNUICallback('focus', function(_, cb)
-    SetNuiFocus(true, true)
+RegisterNUICallback('disconnect', function(_, cb)
+    TriggerServerEvent('node7-charselect:server:disconnect')
     cb({ ok = true })
 end)
 
-RegisterNUICallback('previewGender', function(data, cb)
-    if Config.PreviewPed and Config.PreviewPed.enabled == false then
-        cb({ ok = true, skipped = true })
-        return
-    end
+RegisterCommand('charselect', function()
+    TriggerServerEvent('node7-charselect:server:logout')
+end, false)
 
-    data = type(data) == 'table' and data or {}
-    local ok, result = applyGenderModel(data.gender, true)
+RegisterCommand('characters', function()
+    TriggerServerEvent('node7-charselect:server:logout')
+end, false)
+
+RegisterCommand('logout', function()
+    TriggerServerEvent('node7-charselect:server:logout')
+end, false)
+
+AddEventHandler('onResourceStop', function(resource)
+    if resource ~= GetCurrentResourceName() then return end
+    closeUi()
+    selecting = false
+    destroyCams()
     local ped = PlayerPedId()
-    local pos = getPosition(Config.SelectorPosition)
-    SetEntityCoords(ped, pos.x, pos.y, pos.z, false, false, false, false)
-    SetEntityHeading(ped, pos.w)
-    setPedFrozen(ped, true)
-    SetEntityInvincible(ped, true)
-    if Config.PreviewPed == nil or Config.PreviewPed.visible ~= false then
-        repairPedVisibility(ped)
-    else
-        SetEntityVisible(ped, false)
-    end
-    cb({ ok = ok == true, result = result })
+    FreezeEntityPosition(ped, false)
+    SetEntityInvincible(ped, false)
+    SetEntityCollision(ped, true, true)
+    SetEntityVisible(ped, true, false)
+    forceVisible(ped)
+    DisplayRadar(true)
 end)
-
-RegisterNUICallback('previewSlot', function(data, cb)
-    data = type(data) == 'table' and data or {}
-    local ok = applySceneSlot(tonumber(data.slot) or 1)
-    cb({ ok = ok == true })
-end)
-
-RegisterNUICallback('cancelNew', function(_, cb)
-    cb({ ok = true })
-end)
-
-local function logoutCharacter()
-    if UiOpen or IsSpawning then return end
-
-    local result = serverRequest('logout', { position = getCurrentPosition() })
-    result = type(result) == 'table' and result or { ok = false, error = 'no response from server' }
-
-    if not result.ok then
-        TriggerEvent('chat:addMessage', {
-            color = { 255, 90, 90 },
-            args = { 'Node7', result.error or 'Logout failed' }
-        })
-        return
-    end
-
-    TriggerEvent('chat:addMessage', {
-        color = { 212, 175, 55 },
-        args = { 'Node7', 'Logged out. Last location saved.' }
-    })
-
-    openMenu(true)
-end
-
-RegisterNetEvent('node7-charselect:client:logout', logoutCharacter)
-RegisterNetEvent('node7-multicharacter:client:logout', logoutCharacter)
 
 CreateThread(function()
     while not NetworkIsSessionStarted() or not NetworkIsPlayerActive(PlayerId()) do
         Wait(250)
     end
-
-    Wait(tonumber(Config.OpenDelay) or 1500)
-    openMenu(false)
-end)
-
-if Config.ReopenCommand and Config.ReopenCommand ~= '' then
-    RegisterCommand(Config.ReopenCommand, function()
-        openMenu(true)
-    end, false)
-end
-
-if type(Config.LegacyReopenCommands) == 'table' then
-    for _, command in ipairs(Config.LegacyReopenCommands) do
-        if command and command ~= '' and command ~= Config.ReopenCommand then
-            RegisterCommand(command, function()
-                openMenu(true)
-            end, false)
-        end
-    end
-end
-
-if Config.LogoutCommand and Config.LogoutCommand ~= '' then
-    RegisterCommand(Config.LogoutCommand, logoutCharacter, false)
-end
-
-AddEventHandler('onResourceStop', function(resource)
-    if resource ~= GetCurrentResourceName() then return end
-    SetNuiFocus(false, false)
-    destroySelectorCamera()
-    local ped = PlayerPedId()
-    repairPedVisibility(ped)
-    SetEntityInvincible(ped, false)
-    setPedFrozen(ped, false)
-    DisplayRadar(true)
+    Wait(500)
+    openCharselect()
 end)

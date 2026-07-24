@@ -1,0 +1,14 @@
+name: node7-charselect
+description: NODE7 cinematic RedM character selector with built-in spawn flow.
+author: NODE7 Development Studios
+version: 1.1.0
+
+tasks:
+  - action: ensure
+    resource: oxmysql
+  - action: ensure
+    resource: node7-core
+  - action: ensure
+    resource: node7-appearance
+  - action: ensure
+    resource: node7-charselect

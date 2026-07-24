@@ -1,26 +1,28 @@
-# NODE7 Charselect Versions
+# Versions
 
-## 8.0.0
-- Removed spawn selector support completely.
-- Play/create now spawns directly from charselect.
-- Removed spawn handoff timeout and preparing flow.
-- Kept optimized RedEMRP-style assets and right-side creator panel.
+## 1.2.1
 
-# node7-charselect Versions
-
-## 4.0.0
-- Right-side full character creation panel.
-- Play/create hands off to direct spawn after character load.
-- Spawn selector payload now includes safe character name/identity fields.
-- Retry handoff event from charselect if the spawn selector NUI misses the first open.
-- RedEMRP format/assets preserved.
-
-## 3.0.0
-- Spawn selector bridge added.
+- Removed the spawn-selection screen and every selectable town destination.
+- Existing characters now always load at their persisted last location.
+- New characters use the configured fallback once, then persist that location.
+- Server selection ignores client-provided spawn destinations.
 
 
-V9 clean direct-spawn notes:
-- spawnselect removed
-- clothing handoff removed
-- stable Rhodes character scene enabled
-- no loading/preparing text
+## 1.2.0
+
+- Rebuilt the character selector with a polished NODE7 interface.
+- Removed the dedicated preview ped and all appearance-preview network traffic.
+- Kept the player hidden during selection and only applies the real model after spawn.
+- Preserved built-in spawn selection and node7-core persistence.
+
+## 1.1.1
+
+- Hardened Play/select server flow against core/database errors.
+- Loads players through safe decoded DB data before registering with node7-core.
+- Removed spawn selector dependency; built-in spawn only.
+
+## 1.1.0
+
+- Moved charselect persistence to the RSG-format `node7-core` player API.
+- Removed hard `node7-players` dependency.
+- Kept built-in spawn selection inside charselect.
