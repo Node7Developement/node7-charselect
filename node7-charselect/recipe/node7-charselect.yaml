@@ -1,7 +1,7 @@
 name: node7-charselect
-description: NODE7 cinematic RedM character selector with built-in spawn flow.
+description: NODE7 RedM character selector with western roster UI, no centre preview, native fade handoff, and interior-safe exact last-location persistence.
 author: NODE7 Development Studios
-version: 1.1.0
+version: 1.6.0
 
 tasks:
   - action: ensure

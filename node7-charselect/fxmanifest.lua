@@ -5,8 +5,8 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 lua54 'yes'
 
 author 'NODE7 Development Studios'
-description 'NODE7 Charselect - polished multicharacter UI with last-location-only spawning and no ped preview'
-version '1.2.1'
+description 'NODE7 Charselect - western roster UI, native fade handoff, and exact interior-safe last-location persistence'
+version '1.6.0'
 
 ui_page 'html/index.html'
 

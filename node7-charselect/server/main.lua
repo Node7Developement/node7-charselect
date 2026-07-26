@@ -1,5 +1,7 @@
 local RESOURCE = GetCurrentResourceName()
 local newlyCreatedBySource = {}
+local lastPositionBySource = {}
+local lastPositionSaveAt = {}
 
 local function cfg()
     return Node7CharselectConfig or {}
@@ -371,6 +373,7 @@ local function loadWithCore(src, citizenid)
     if row.license and row.license ~= license then return nil, 'license_mismatch' end
 
     local playerData = compactCharacter(row)
+    local persistedPosition = playerData.position
     playerData.source = src
     playerData.license = license
     playerData.name = GetPlayerName(src) or playerData.name or ('Player %s'):format(src)
@@ -378,18 +381,27 @@ local function loadWithCore(src, citizenid)
     if core and core.Player and core.Player.CheckPlayerData then
         local ok, playerObject = pcall(core.Player.CheckPlayerData, src, playerData)
         if ok then
+            local loadedData = playerData
             if playerObject and playerObject.PlayerData then
-                return compactCharacter(playerObject.PlayerData)
-            end
-
-            if core.Functions and core.Functions.GetPlayer then
+                playerObject.PlayerData.position = persistedPosition
+                loadedData = playerObject.PlayerData
+            elseif core.Functions and core.Functions.GetPlayer then
                 local gotOk, loadedPlayer = pcall(core.Functions.GetPlayer, src)
                 if gotOk and loadedPlayer and loadedPlayer.PlayerData then
-                    return compactCharacter(loadedPlayer.PlayerData)
+                    loadedPlayer.PlayerData.position = persistedPosition
+                    loadedData = loadedPlayer.PlayerData
                 end
             end
 
-            return playerData
+            -- node7-core saves once while creating the player object using the selection-scene ped.
+            -- Restore the actual persisted location immediately so the database never keeps that scene position.
+            Wait(150)
+            safeDb(function()
+                return MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ?', {
+                    encodeJson(persistedPosition), citizenid
+                })
+            end, false)
+            return compactCharacter(loadedData)
         end
         print(('^1[node7-charselect]^7 core player load failed, using safe player data: %s'):format(tostring(playerObject)))
     end
@@ -519,39 +531,135 @@ RegisterNetEvent('node7-charselect:server:deleteCharacter', function(requestId, 
     if not ok then eventError(src, requestId, 'node7-charselect:client:deleteResult', err) end
 end)
 
+local function finiteNumber(value)
+    value = tonumber(value)
+    if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
+    return value
+end
+
+local function normalizePosition(position)
+    if type(position) ~= 'table' then return nil end
+    local normalized = {
+        x = finiteNumber(position.x),
+        y = finiteNumber(position.y),
+        z = finiteNumber(position.z),
+        w = finiteNumber(position.w or position.heading) or 0.0,
+        interior = math.floor(finiteNumber(position.interior or position.interiorId) or 0),
+        room = math.floor(finiteNumber(position.room or position.roomKey) or 0)
+    }
+    if not normalized.x or not normalized.y or not normalized.z then return nil end
+    if math.abs(normalized.x) > 20000.0 or math.abs(normalized.y) > 20000.0 or normalized.z < -1000.0 or normalized.z > 5000.0 then return nil end
+    normalized.isInterior = position.isInterior == true or normalized.interior ~= 0 or normalized.room ~= 0
+    return normalized
+end
+
+local function getCorePlayer(src)
+    local core = getCore()
+    if not core or not core.Functions or not core.Functions.GetPlayer then return core, nil end
+    local ok, player = pcall(core.Functions.GetPlayer, src)
+    return core, ok and player or nil
+end
+
+local function persistPosition(src, normalized)
+    local core, player = getCorePlayer(src)
+    if player and player.PlayerData and player.PlayerData.citizenid then
+        player.PlayerData.position = normalized
+        local affected = safeDb(function()
+            return MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ?', {
+                encodeJson(normalized), player.PlayerData.citizenid
+            })
+        end, false)
+        lastPositionBySource[src] = normalized
+        return affected ~= false
+    end
+
+    local ok = callPlayers('SetPosition', src, normalized)
+    if ok ~= false then lastPositionBySource[src] = normalized end
+    return ok ~= false
+end
+
+local function savePlayerPosition(src, position)
+    local normalized = normalizePosition(position)
+    if not normalized then return false end
+    return persistPosition(src, normalized)
+end
+
+local function saveCoreSnapshotAndLogout(src, normalized)
+    local core, player = getCorePlayer(src)
+    if not player or not player.PlayerData or not player.PlayerData.citizenid then return false end
+
+    if player.Functions and player.Functions.PersistStateBags then
+        pcall(player.Functions.PersistStateBags)
+    end
+
+    local data = player.PlayerData
+    data.position = normalized
+
+    if GetResourceState('node7-inventory') == 'started' then
+        pcall(function() exports['node7-inventory']:SaveInventory(src) end)
+    end
+
+    local saved = safeDb(function()
+        return MySQL.update.await([[
+            UPDATE players
+            SET name = ?, money = ?, charinfo = ?, job = ?, gang = ?, position = ?, metadata = ?, weight = ?, slots = ?
+            WHERE citizenid = ?
+        ]], {
+            data.name,
+            encodeJson(data.money),
+            encodeJson(data.charinfo),
+            encodeJson(data.job),
+            encodeJson(data.gang),
+            encodeJson(normalized),
+            encodeJson(data.metadata),
+            tonumber(data.weight) or 35000,
+            tonumber(data.slots) or 25,
+            data.citizenid
+        })
+    end, false)
+
+    if saved == false then return false end
+    lastPositionBySource[src] = normalized
+    if core and core.Player and core.Player.Logout then
+        pcall(core.Player.Logout, src)
+    elseif player.Functions and player.Functions.Logout then
+        pcall(player.Functions.Logout)
+    end
+    return true
+end
+
 RegisterNetEvent('node7-charselect:server:savePosition', function(position)
     local src = source
-    if type(position) ~= 'table' then return end
-
-    pcall(function()
-        local core = getCore()
-        if core and core.Functions and core.Functions.GetPlayer then
-            local player = core.Functions.GetPlayer(src)
-            if player and player.Functions and player.Functions.SetPlayerData then
-                player.Functions.SetPlayerData('position', {
-                    x = tonumber(position.x),
-                    y = tonumber(position.y),
-                    z = tonumber(position.z),
-                    w = tonumber(position.w)
-                })
-                if core.Player and core.Player.Save then pcall(core.Player.Save, src) end
-                return
-            end
-        end
-
-        callPlayers('SetPosition', src, {
-            x = tonumber(position.x),
-            y = tonumber(position.y),
-            z = tonumber(position.z),
-            w = tonumber(position.w)
-        })
-    end)
+    local now = GetGameTimer()
+    if now - (lastPositionSaveAt[src] or 0) < 500 then return end
+    lastPositionSaveAt[src] = now
+    local ok, err = pcall(savePlayerPosition, src, position)
+    if not ok then debugPrint(('savePosition failed: %s'):format(tostring(err))) end
 end)
 
-RegisterNetEvent('node7-charselect:server:logout', function()
+RegisterNetEvent('node7-charselect:server:logout', function(position)
     local src = source
     newlyCreatedBySource[src] = nil
-    pcall(unloadCurrent, src, true)
+    local normalized = normalizePosition(position) or lastPositionBySource[src]
+
+    local saved = false
+    if normalized then
+        local ok, result = pcall(saveCoreSnapshotAndLogout, src, normalized)
+        saved = ok and result == true
+    end
+
+    if not saved then
+        if normalized then pcall(persistPosition, src, normalized) end
+        pcall(unloadCurrent, src, true)
+        if normalized then
+            -- Final authoritative write after any fallback core save that may use stale server-ped coordinates.
+            Wait(350)
+            pcall(persistPosition, src, normalized)
+        end
+    end
+
+    lastPositionBySource[src] = nil
+    lastPositionSaveAt[src] = nil
     TriggerClientEvent('node7-charselect:client:chooseChar', src)
 end)
 
@@ -562,35 +670,33 @@ end)
 
 AddEventHandler('playerDropped', function()
     newlyCreatedBySource[source] = nil
+    lastPositionBySource[source] = nil
+    lastPositionSaveAt[source] = nil
 end)
 
 RegisterCommand('logout', function(source)
     if source <= 0 then return end
-    unloadCurrent(source, true)
-    TriggerClientEvent('node7-charselect:client:chooseChar', source)
+    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
 end, false)
 
 RegisterCommand('charselect', function(source)
     if source <= 0 then return end
-    unloadCurrent(source, true)
-    TriggerClientEvent('node7-charselect:client:chooseChar', source)
+    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
 end, false)
 
 RegisterCommand('characters', function(source)
     if source <= 0 then return end
-    unloadCurrent(source, true)
-    TriggerClientEvent('node7-charselect:client:chooseChar', source)
+    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
 end, false)
 
 AddEventHandler('onResourceStart', function(resource)
     if resource ~= RESOURCE then return end
-    print('^2[node7-charselect]^7 Started | NODE7 core players | last-location only | core grade fix | no ped preview')
+    print('^2[node7-charselect]^7 Started v1.6.0 | no character preview | native fade handoff | interior-safe last location')
 end)
 
 exports('OpenCharacterSelect', function(source)
     source = tonumber(source)
     if not source or source <= 0 then return false end
-    unloadCurrent(source, true)
-    TriggerClientEvent('node7-charselect:client:chooseChar', source)
+    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
     return true
 end)
