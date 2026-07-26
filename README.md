@@ -6,7 +6,8 @@
 
 
 
-<img width="1920" height="1080" alt="yesssssssssssssssss" src="https://github.com/user-attachments/assets/f3429c59-6813-472a-96b8-158ad4df3e11" />
+<img width="1920" height="1080" alt="characterselector" src="https://github.com/user-attachments/assets/fd9171ab-5a15-4a86-9195-160c0f3b1dc1" />
+
 
 
 # node7-charselect
