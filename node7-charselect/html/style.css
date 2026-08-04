@@ -761,3 +761,139 @@ input[type="date"]::-webkit-clear-button {
 .character-register * {
     pointer-events: auto;
 }
+
+
+/* Character loading transition. This overlays the existing RSG UI without moving or restyling it. */
+.character-loading-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background:
+        radial-gradient(circle at center, rgba(105, 79, 48, 0.18), rgba(10, 8, 6, 0.96) 68%),
+        linear-gradient(135deg, rgba(68, 43, 24, 0.94), rgba(8, 7, 6, 0.98));
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.character-loading-overlay::before,
+.character-loading-overlay::after {
+    content: '';
+    position: absolute;
+    inset: -8%;
+    pointer-events: none;
+}
+
+.character-loading-overlay::before {
+    background-image: url(./assets/inkroller_1a.png);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 76% 70%;
+    opacity: 0.13;
+    animation: node7-loading-breathe 4s ease-in-out infinite;
+}
+
+.character-loading-overlay::after {
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.018) 0,
+        rgba(255, 255, 255, 0.018) 1px,
+        transparent 1px,
+        transparent 4px
+    );
+    opacity: 0.45;
+}
+
+.character-loading-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: min(560px, 78vw);
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #ffffff;
+    font-family: "RDR Lino Regular", serif;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.95);
+}
+
+.character-loading-kicker {
+    margin-top: 2.2vh;
+    font-size: 1.35vh;
+    letter-spacing: 0.65vh;
+    opacity: 0.68;
+}
+
+#character-loading-title {
+    margin-top: 0.9vh;
+    font-size: clamp(28px, 3.2vh, 48px);
+    letter-spacing: 0.28vh;
+    text-transform: uppercase;
+}
+
+#character-loading-message {
+    margin-top: 1.3vh;
+    font-size: clamp(14px, 1.45vh, 20px);
+    letter-spacing: 0.08vh;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+.native-wheel-fallback {
+    display: inline-block;
+    position: relative;
+    width: 78px;
+    height: 78px;
+}
+
+.native-wheel-fallback span {
+    box-sizing: border-box;
+    display: block;
+    position: absolute;
+    width: 62px;
+    height: 62px;
+    margin: 8px;
+    border: 6px solid rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    animation: node7-loading-wheel 1.15s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    border-color: rgba(255, 255, 255, 0.9) transparent transparent transparent;
+}
+
+.native-wheel-fallback span:nth-child(1) { animation-delay: -0.45s; }
+.native-wheel-fallback span:nth-child(2) { animation-delay: -0.30s; }
+.native-wheel-fallback span:nth-child(3) { animation-delay: -0.15s; }
+
+.character-loading-track {
+    width: min(360px, 66vw);
+    height: 3px;
+    margin: 2.8vh auto 0;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+}
+
+.character-loading-track span {
+    display: block;
+    width: 42%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.85);
+    animation: node7-loading-track 1.7s ease-in-out infinite;
+}
+
+#play.loading,
+#play.disabled {
+    pointer-events: none;
+    opacity: 0.62;
+}
+
+@keyframes node7-loading-wheel {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes node7-loading-track {
+    0% { transform: translateX(-130%); }
+    100% { transform: translateX(340%); }
+}
+
+@keyframes node7-loading-breathe {
+    0%, 100% { transform: scale(1); opacity: 0.10; }
+    50% { transform: scale(1.025); opacity: 0.17; }
+}

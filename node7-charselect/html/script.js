@@ -5,6 +5,8 @@ var Loaded = false;
 var NChar = null;
 var selectedGender = 0;
 var createSubmitting = false;
+var characterLoading = false;
+var loadRequestPending = false;
 
 const resourceName = typeof GetParentResourceName === 'function' ? GetParentResourceName() : 'node7-charselect';
 const nui = (route, payload) => $.post(`https://${resourceName}/${route}`, JSON.stringify(payload || {}));
@@ -100,6 +102,11 @@ $(document).ready(function () {
         if (data.action === 'ui') {
             NChar = data.nChar;
             if (data.toggle) {
+                selectedChar = null;
+                characterLoading = false;
+                loadRequestPending = false;
+                createSubmitting = false;
+                $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
                 $('.container').show();
                 $('.welcomescreen').fadeIn(150);
                 qbMultiCharacters.resetAll();
@@ -136,12 +143,53 @@ $(document).ready(function () {
                 $('.container').fadeOut(250);
                 qbMultiCharacters.resetAll();
                 resetCreateForm();
+                selectedChar = null;
+                characterLoading = false;
+                loadRequestPending = false;
             }
+        }
+
+        if (data.action === 'selectionReset') {
+            selectedChar = null;
+            characterLoading = false;
+            loadRequestPending = false;
+            createSubmitting = false;
+            $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
+            $('#play').removeClass('loading disabled');
+            $('#play-text').text('Select a character');
+            resetCreateForm();
+        }
+
+        if (data.action === 'characterLoading') {
+            if (data.toggle) {
+                characterLoading = true;
+                loadRequestPending = false;
+                $('#character-loading-title').text(data.title || 'YOU ARE WAKING UP');
+                $('#character-loading-message').text(data.message || 'Returning to your last location...');
+                $('.character-register, .character-delete, .welcomescreen').stop(true, true).hide();
+                $('.characters-list, .character-info').stop(true, true).hide();
+                $('.character-loading-overlay').stop(true, true).fadeIn(180).attr('aria-hidden', 'false');
+            } else {
+                characterLoading = false;
+                loadRequestPending = false;
+                $('.character-loading-overlay').stop(true, true).fadeOut(180).attr('aria-hidden', 'true');
+            }
+        }
+
+        if (data.action === 'characterLoadFailed') {
+            characterLoading = false;
+            loadRequestPending = false;
+            $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
+            $('#play').removeClass('loading disabled');
+            $('#play-text').text(selectedChar && $(selectedChar).data('cid') !== '' ? 'Play' : 'Create');
         }
 
         if (data.action === 'setupCharacters') setupCharacters(data.characters || []);
         if (data.action === 'setupCharInfo') setupCharInfo(data.chardata);
-        if (data.action === 'createResult' && data.success === false) showCreateResult(data.message);
+        if (data.action === 'createResult' && data.success === false) {
+            loadRequestPending = false;
+            showCreateResult(data.message);
+        }
         if (data.action === 'deleteResult') {
             $('.character-delete').fadeOut(150);
             if (data.success) refreshCharacters();
@@ -204,6 +252,7 @@ function setupCharacters(characters) {
 
 $(document).on('click', '.character', function (event) {
     event.preventDefault();
+    if (characterLoading || loadRequestPending) return;
     const cDataPed = $(this).data('cData');
 
     if (selectedChar !== null && $(selectedChar).attr('id') === $(this).attr('id')) return;
@@ -233,6 +282,7 @@ $(document).on('click', '#create', function (event) {
     if (createSubmitting || !validateCreateForm(true) || selectedChar === null) return;
 
     createSubmitting = true;
+    loadRequestPending = true;
     $('#create').addClass('submitting disabled');
     $('.form-submit-feedback').text('Creating character...');
 
@@ -244,6 +294,7 @@ $(document).on('click', '#create', function (event) {
         nationality: fieldValue('nationality'),
         gender: selectedGender
     }).fail(function () {
+        loadRequestPending = false;
         showCreateResult('The game client did not accept the creation request.');
     });
 });
@@ -273,6 +324,7 @@ function refreshCharacters() {
     setTimeout(function () {
         if (selectedChar) $(selectedChar).removeClass('char-selected');
         selectedChar = null;
+        loadRequestPending = false;
         nui('setupCharacters');
         $('#delete').css({ display: 'none' });
         $('#play').css({ display: 'none' });
@@ -290,16 +342,18 @@ $('#close-reg').click(function (event) {
 
 $(document).on('click', '#play', function (event) {
     event.preventDefault();
-    if (selectedChar === null) return;
+    if (selectedChar === null || characterLoading || loadRequestPending) return;
 
     const charData = $(selectedChar).data('cid');
     if (charData !== '') {
-        nui('selectCharacter', { cData: $(selectedChar).data('cData') });
-        setTimeout(function () {
-            qbMultiCharacters.fadeOutDown('.characters-list', '-40%', 400);
-            qbMultiCharacters.fadeOutDown('.character-info', '-40%', 400);
-            qbMultiCharacters.resetAll();
-        }, 1500);
+        loadRequestPending = true;
+        $('#play').addClass('loading disabled');
+        $('#play-text').text('Loading...');
+        nui('selectCharacter', { cData: $(selectedChar).data('cData') }).fail(function () {
+            loadRequestPending = false;
+            $('#play').removeClass('loading disabled');
+            $('#play-text').text('Play');
+        });
     } else {
         resetCreateForm();
         $('.characters-list').css('filter', 'blur(2px)');
@@ -311,6 +365,7 @@ $(document).on('click', '#play', function (event) {
 
 $(document).on('click', '#delete', function (event) {
     event.preventDefault();
+    if (characterLoading || loadRequestPending) return;
     if (selectedChar !== null && $(selectedChar).data('cid') !== '') {
         $('.character-delete').fadeIn(250);
     }

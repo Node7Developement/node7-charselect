@@ -26,3 +26,6 @@ ensure node7-charselect
 - A separate cloned preview ped stays at the original RSG preview coordinates.
 - New characters save a default male or female Node7 appearance and spawn at `Config.DefaultSpawn`.
 - Players can then visit the normal clothing/appearance locations to customize.
+- Existing characters are moved to their stored gameplay position before `node7-core` login completes, preventing the selector scene from becoming their saved location.
+- A native RedM loading screen and NODE7 loading overlay remain visible until appearance and collision are ready.
+- Logout saves the exact gameplay position before the player is moved back to charselect.

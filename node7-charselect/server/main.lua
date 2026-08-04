@@ -1,6 +1,10 @@
 local Node7Core = exports['node7-core']:GetCoreObject()
 local RESOURCE_NAME = GetCurrentResourceName()
 
+local pendingLoads = {}
+local SELECTOR_PLAYER_STAGE = { x = 1542.79, y = 1187.29, z = 283.18 }
+local SELECTOR_PREVIEW_STAGE = { x = 1544.10, y = 1187.65, z = 283.18 }
+
 local function notify(source, message, notifyType)
     Node7Core.Functions.Notify(source, {
         title = 'NODE7 CHARSELECT',
@@ -49,13 +53,46 @@ local function getLicense(source)
     return Node7Core.Functions.GetIdentifier(source, 'license') or GetPlayerIdentifierByType(source, 'license')
 end
 
+local function normalizePosition(position)
+    position = decode(position, Config.DefaultSpawn)
+    position = type(position) == 'table' and position or Config.DefaultSpawn
+
+    return {
+        x = tonumber(position.x or position[1]) or Config.DefaultSpawn.x,
+        y = tonumber(position.y or position[2]) or Config.DefaultSpawn.y,
+        z = tonumber(position.z or position[3]) or Config.DefaultSpawn.z,
+        w = tonumber(position.w or position.h or position.heading or position[4]) or Config.DefaultSpawn.w,
+    }
+end
+
+local function distanceSquared(position, target)
+    local dx = position.x - target.x
+    local dy = position.y - target.y
+    local dz = position.z - target.z
+    return (dx * dx) + (dy * dy) + (dz * dz)
+end
+
+local function isSelectorPosition(position)
+    local radiusSquared = 25.0 * 25.0
+    return distanceSquared(position, SELECTOR_PLAYER_STAGE) <= radiusSquared
+        or distanceSquared(position, SELECTOR_PREVIEW_STAGE) <= radiusSquared
+end
+
+local function sanitizeStoredPosition(position)
+    local normalized = normalizePosition(position)
+    if isSelectorPosition(normalized) then
+        return normalizePosition(Config.DefaultSpawn), true
+    end
+    return normalized, false
+end
+
 local function compactCharacter(row)
     row.charinfo = decode(row.charinfo, {})
     row.money = decode(row.money, {})
     row.job = decode(row.job, { name = 'unemployed', label = 'Civilian', grade = { level = 0 } })
     row.gang = decode(row.gang, { name = 'none', label = 'No Gang Affiliation', grade = { level = 0 } })
     row.metadata = decode(row.metadata, {})
-    row.position = decode(row.position, Config.DefaultSpawn)
+    row.position = normalizePosition(row.position)
     row.cid = tonumber(row.cid or row.slot) or 1
     row.slot = tonumber(row.slot or row.cid) or row.cid
     row.job.label = row.job.label or row.job.name or 'Civilian'
@@ -113,8 +150,88 @@ local function getCharacterLimit(source)
     return math.max(1, math.min(tonumber(Config.DefaultNumberOfCharacters) or 5, 5))
 end
 
+local function createLoadToken(source)
+    return ('%d:%d:%d'):format(source, os.time(), math.random(100000, 999999))
+end
+
+local function failPendingLoad(source, message)
+    pendingLoads[source] = nil
+    TriggerClientEvent('node7-charselect:client:serverError', source, message)
+end
+
+local function moveServerPedToPosition(source, position)
+    local ped = GetPlayerPed(source)
+    if not ped or ped <= 0 then return end
+
+    pcall(function()
+        SetEntityCoords(ped, position.x, position.y, position.z, false, false, false, false)
+        SetEntityHeading(ped, position.w)
+    end)
+end
+
+local function beginCharacterLoad(source, pending)
+    local active = pendingLoads[source]
+    if active and os.time() - (active.createdAt or 0) <= 30 then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'A character is already loading.')
+        return false
+    end
+    pendingLoads[source] = nil
+
+    pending.token = createLoadToken(source)
+    pending.createdAt = os.time()
+    pendingLoads[source] = pending
+    TriggerClientEvent(
+        'node7-charselect:client:prepareCharacterLoad',
+        source,
+        pending.token,
+        pending.position,
+        pending.kind == 'new'
+    )
+    return true
+end
+
+local function saveExactLogoutPosition(source, player)
+    if not player or not player.PlayerData or not player.PlayerData.citizenid then return end
+
+    local ped = GetPlayerPed(source)
+    if not ped or ped <= 0 then return end
+
+    local coords = GetEntityCoords(ped)
+    local position = {
+        x = tonumber(coords.x) or Config.DefaultSpawn.x,
+        y = tonumber(coords.y) or Config.DefaultSpawn.y,
+        z = tonumber(coords.z) or Config.DefaultSpawn.z,
+        w = tonumber(GetEntityHeading(ped)) or Config.DefaultSpawn.w,
+    }
+
+    -- Never save the selector lobby as a gameplay location.
+    if isSelectorPosition(position) then return end
+
+    player.PlayerData.position = position
+    if player.Functions and player.Functions.Save then
+        player.Functions.Save()
+    end
+
+    MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ? AND license = ?', {
+        json.encode(position),
+        player.PlayerData.citizenid,
+        getLicense(source),
+    })
+end
+
 Node7Core.Functions.CreateCallback('node7-charselect:server:GetNumberOfCharacters', function(source, cb)
     cb(getCharacterLimit(source))
+end)
+
+Node7Core.Functions.CreateCallback('node7-charselect:server:prepareSelection', function(source, cb)
+    pendingLoads[source] = nil
+    local player = Node7Core.Functions.GetPlayer(source)
+    if player then
+        saveExactLogoutPosition(source, player)
+        Node7Core.Player.Logout(source)
+        Wait(250)
+    end
+    cb(true)
 end)
 
 Node7Core.Functions.CreateCallback('node7-charselect:server:setupCharacters', function(source, cb)
@@ -131,12 +248,14 @@ Node7Core.Functions.CreateCallback('node7-charselect:server:getAppearance', func
 end)
 
 RegisterNetEvent('node7-charselect:server:disconnect', function()
+    pendingLoads[source] = nil
     DropPlayer(source, Config.DisconnectMessage)
 end)
 
 RegisterNetEvent('node7-charselect:server:loadUserData', function(citizenid)
     local source = source
     citizenid = trim(citizenid)
+
     if citizenid == '' or not characterOwnedBy(source, citizenid) then
         TriggerClientEvent('node7-charselect:client:serverError', source, 'Character ownership validation failed.')
         return
@@ -146,32 +265,32 @@ RegisterNetEvent('node7-charselect:server:loadUserData', function(citizenid)
         citizenid,
         getLicense(source),
     })
-    local storedPosition = storedRow and decode(storedRow.position, Config.DefaultSpawn) or Config.DefaultSpawn
+    local storedPosition, repaired = sanitizeStoredPosition(storedRow and storedRow.position or Config.DefaultSpawn)
 
-    if Node7Core.Functions.GetPlayer(source) then
-        Node7Core.Player.Logout(source)
+    if repaired then
+        MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ? AND license = ?', {
+            json.encode(storedPosition),
+            citizenid,
+            getLicense(source),
+        })
     end
 
-    if not Node7Core.Player.Login(source, citizenid) then
-        TriggerClientEvent('node7-charselect:client:serverError', source, 'Character could not be loaded.')
-        return
-    end
-
-    local player = Node7Core.Functions.GetPlayer(source)
-    if not player or not player.PlayerData then
-        TriggerClientEvent('node7-charselect:client:serverError', source, 'Character data was unavailable after login.')
-        return
-    end
-
-    player.PlayerData.position = storedPosition
-    TriggerClientEvent('node7-charselect:client:closeNUI', source)
-    TriggerClientEvent('node7-charselect:client:spawnCharacter', source, player.PlayerData, getAppearance(citizenid))
+    beginCharacterLoad(source, {
+        kind = 'existing',
+        citizenid = citizenid,
+        position = storedPosition,
+    })
 end)
 
 RegisterNetEvent('node7-charselect:server:createCharacter', function(data)
     local source = source
     data = type(data) == 'table' and data or {}
     local slot = tonumber(data.cid)
+
+    if pendingLoads[source] then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'A character is already loading.')
+        return
+    end
 
     if not slot or slot < 1 or slot > getCharacterLimit(source) then
         TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Invalid character slot.')
@@ -208,30 +327,88 @@ RegisterNetEvent('node7-charselect:server:createCharacter', function(data)
         return
     end
 
-    if Node7Core.Functions.GetPlayer(source) then
-        Node7Core.Player.Logout(source)
+    local spawnPosition = normalizePosition(Config.DefaultSpawn)
+    beginCharacterLoad(source, {
+        kind = 'new',
+        position = spawnPosition,
+        license = license,
+        slot = slot,
+        gender = gender,
+        firstname = firstname,
+        lastname = lastname,
+        newData = {
+            cid = slot,
+            slot = slot,
+            charinfo = {
+                firstname = firstname,
+                lastname = lastname,
+                birthdate = birthdate,
+                gender = gender,
+                nationality = nationality,
+            },
+            position = spawnPosition,
+        },
+    })
+end)
+
+RegisterNetEvent('node7-charselect:server:readyForCharacterLoad', function(token)
+    local source = source
+    local pending = pendingLoads[source]
+
+    if not pending or pending.token ~= tostring(token or '') then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'The character loading request expired.')
+        return
     end
 
-    local newData = {
-        cid = slot,
-        slot = slot,
-        charinfo = {
-            firstname = firstname,
-            lastname = lastname,
-            birthdate = birthdate,
-            gender = gender,
-            nationality = nationality,
-        },
-        position = {
-            x = Config.DefaultSpawn.x,
-            y = Config.DefaultSpawn.y,
-            z = Config.DefaultSpawn.z,
-            w = Config.DefaultSpawn.w,
-        },
-    }
+    if os.time() - pending.createdAt > 30 then
+        failPendingLoad(source, 'The character loading request timed out.')
+        return
+    end
 
-    if not Node7Core.Player.Login(source, false, newData) then
-        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The character could not be created.')
+    pendingLoads[source] = nil
+    moveServerPedToPosition(source, pending.position)
+    Wait(350)
+
+    local currentPlayer = Node7Core.Functions.GetPlayer(source)
+    if currentPlayer then
+        Node7Core.Player.Logout(source)
+        Wait(250)
+    end
+
+    if pending.kind == 'existing' then
+        if not characterOwnedBy(source, pending.citizenid) then
+            TriggerClientEvent('node7-charselect:client:serverError', source, 'Character ownership validation failed.')
+            return
+        end
+
+        if not Node7Core.Player.Login(source, pending.citizenid) then
+            TriggerClientEvent('node7-charselect:client:serverError', source, 'Character could not be loaded.')
+            return
+        end
+
+        local player = Node7Core.Functions.GetPlayer(source)
+        if not player or not player.PlayerData then
+            TriggerClientEvent('node7-charselect:client:serverError', source, 'Character data was unavailable after login.')
+            return
+        end
+
+        player.PlayerData.position = pending.position
+        TriggerClientEvent('node7-charselect:client:closeNUI', source)
+        TriggerClientEvent('node7-charselect:client:spawnCharacter', source, player.PlayerData, getAppearance(pending.citizenid))
+        return
+    end
+
+    local occupied = MySQL.scalar.await('SELECT citizenid FROM players WHERE license = ? AND slot = ? LIMIT 1', {
+        pending.license,
+        pending.slot,
+    })
+    if occupied then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'That character slot is already occupied.')
+        return
+    end
+
+    if not Node7Core.Player.Login(source, false, pending.newData) then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'The character could not be created.')
         return
     end
 
@@ -239,33 +416,27 @@ RegisterNetEvent('node7-charselect:server:createCharacter', function(data)
     local citizenid = player and player.PlayerData and player.PlayerData.citizenid
     if not citizenid then
         Node7Core.Player.Logout(source)
-        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The new character ID was not created.')
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'The new character ID was not created.')
         return
     end
 
-    if not saveDefaultAppearance(citizenid, gender) then
+    if not saveDefaultAppearance(citizenid, pending.gender) then
         Node7Core.Player.Logout(source)
-        MySQL.query.await('DELETE FROM players WHERE citizenid = ? AND license = ?', { citizenid, license })
-        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The default NODE7 appearance could not be saved.')
+        MySQL.query.await('DELETE FROM players WHERE citizenid = ? AND license = ?', { citizenid, pending.license })
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'The default NODE7 appearance could not be saved.')
         return
     end
 
-    local spawnPosition = {
-        x = Config.DefaultSpawn.x,
-        y = Config.DefaultSpawn.y,
-        z = Config.DefaultSpawn.z,
-        w = Config.DefaultSpawn.w,
-    }
-    player.PlayerData.position = spawnPosition
+    player.PlayerData.position = pending.position
     MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ? AND license = ?', {
-        json.encode(spawnPosition),
+        json.encode(pending.position),
         citizenid,
-        license,
+        pending.license,
     })
 
     TriggerClientEvent('node7-charselect:client:closeNUI', source)
     TriggerClientEvent('node7-charselect:client:spawnCharacter', source, player.PlayerData, getAppearance(citizenid))
-    notify(source, ('Welcome, %s %s. Visit a clothing store to customize your character.'):format(firstname, lastname), 'success')
+    notify(source, ('Welcome, %s %s. Visit a clothing store to customize your character.'):format(pending.firstname, pending.lastname), 'success')
 end)
 
 local function tableExists(tableName)
@@ -322,12 +493,19 @@ end)
 
 RegisterCommand('logout', function(source)
     if source <= 0 then return end
+
+    pendingLoads[source] = nil
     local player = Node7Core.Functions.GetPlayer(source)
-    if player and player.Functions then
-        player.Functions.Save()
+    if player then
+        saveExactLogoutPosition(source, player)
         Node7Core.Player.Logout(source)
     end
+
     TriggerClientEvent('node7-charselect:client:chooseChar', source)
 end, false)
 
-print(('[%s] started v5.0.0'):format(RESOURCE_NAME))
+AddEventHandler('playerDropped', function()
+    pendingLoads[source] = nil
+end)
+
+print(('[%s] started v5.1.0'):format(RESOURCE_NAME))

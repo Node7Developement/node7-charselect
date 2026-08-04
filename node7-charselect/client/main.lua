@@ -5,6 +5,10 @@ local selectingChar = true
 local isChoosing = false
 local menuOpen = false
 local previewToken = 0
+local selectionSession = 0
+local loadRequestPending = false
+local loadingCharacter = false
+local nativeLoadingActive = false
 local cam = nil
 local fixedCam = nil
 
@@ -24,6 +28,65 @@ local function notify(message, notifyType)
             type = notifyType or 'info',
             duration = 5000,
         })
+    end
+end
+
+local function decodePosition(position)
+    if type(position) == 'string' then
+        local ok, decoded = pcall(json.decode, position)
+        if ok then position = decoded end
+    end
+
+    position = type(position) == 'table' and position or {}
+    return {
+        x = tonumber(position.x or position[1]) or Config.DefaultSpawn.x,
+        y = tonumber(position.y or position[2]) or Config.DefaultSpawn.y,
+        z = tonumber(position.z or position[3]) or Config.DefaultSpawn.z,
+        w = tonumber(position.w or position.h or position.heading or position[4]) or Config.DefaultSpawn.w,
+    }
+end
+
+local function setNativeLoadingScreen(enabled, title, subtitle)
+    if enabled then
+        nativeLoadingActive = true
+        pcall(function()
+            Citizen.InvokeNative(
+                0x1E5B70E53DB661E5,
+                1122662550,
+                347053089,
+                0,
+                'NODE7',
+                tostring(title or 'YOU ARE WAKING UP'),
+                tostring(subtitle or 'Returning to your last location')
+            )
+        end)
+    elseif nativeLoadingActive then
+        nativeLoadingActive = false
+        pcall(ShutdownLoadingScreen)
+        pcall(ShutdownLoadingScreenNui)
+    end
+end
+
+local function setLoadingOverlay(enabled, isNew, message)
+    SendNUIMessage({
+        action = 'characterLoading',
+        toggle = enabled == true,
+        title = 'YOU ARE WAKING UP',
+        message = message or (isNew and 'Beginning your story...' or 'Returning to your last location...'),
+    })
+end
+
+local function stopCharacterLoading(hideUi)
+    loadingCharacter = false
+    loadRequestPending = false
+    setNativeLoadingScreen(false)
+    setLoadingOverlay(false)
+    pcall(ClearFocus)
+
+    if hideUi then
+        SendNUIMessage({ action = 'ui', toggle = false })
+    else
+        SendNUIMessage({ action = 'characterLoadFailed' })
     end
 end
 
@@ -48,6 +111,42 @@ local function hidePlayerAtOriginalStage()
     SetEntityAlpha(ped, 0, false)
     pcall(function() NetworkSetEntityInvisibleToNetwork(ped, true) end)
     return ped
+end
+
+local function prepareHiddenPlayerForSpawn(position)
+    local ped = PlayerPedId()
+    pcall(function() SetFocusPosAndVel(position.x, position.y, position.z, 0.0, 0.0, 0.0) end)
+    RequestCollisionAtCoord(position.x, position.y, position.z)
+    FreezeEntityPosition(ped, true)
+    SetEntityInvincible(ped, true)
+    SetBlockingOfNonTemporaryEvents(ped, true)
+    SetEntityCollision(ped, false, false)
+    SetEntityVisible(ped, false, false)
+    SetEntityAlpha(ped, 0, false)
+    SetEntityCoords(ped, position.x, position.y, position.z, false, false, false, false)
+    SetEntityHeading(ped, position.w)
+    pcall(function() NetworkSetEntityInvisibleToNetwork(ped, true) end)
+end
+
+local function waitForSpawnCollision(ped, position)
+    local deadline = GetGameTimer() + 15000
+    local loaded = false
+
+    pcall(function() SetFocusPosAndVel(position.x, position.y, position.z, 0.0, 0.0, 0.0) end)
+    repeat
+        RequestCollisionAtCoord(position.x, position.y, position.z)
+        loaded = false
+        pcall(function()
+            loaded = HasCollisionLoadedAroundEntity(ped)
+        end)
+        if loaded then break end
+        Wait(50)
+    until GetGameTimer() >= deadline
+
+    -- Give the final scene a short settling window even if the native timed out.
+    Wait(250)
+    pcall(ClearFocus)
+    return loaded
 end
 
 local function preparePreviewPed(ped)
@@ -140,51 +239,85 @@ local function skyCam(enabled)
     end
 end
 
-local function openCharMenu(enabled)
+local function openCharMenu(enabled, session)
+    if not enabled then
+        menuOpen = false
+        isChoosing = false
+        SetNuiFocus(false, false)
+        SendNUIMessage({ action = 'ui', toggle = false })
+        skyCam(false)
+        return
+    end
+
     Node7Core.Functions.TriggerCallback('node7-charselect:server:GetNumberOfCharacters', function(result)
-        menuOpen = enabled
-        SetNuiFocus(enabled, enabled)
+        if session and session ~= selectionSession then return end
+
+        menuOpen = true
+        isChoosing = true
+        SetNuiFocus(true, true)
         SendNUIMessage({
             action = 'ui',
-            toggle = enabled,
+            toggle = true,
             nChar = tonumber(result) or Config.DefaultNumberOfCharacters,
         })
-        isChoosing = enabled
         Wait(100)
-        skyCam(enabled)
+        skyCam(true)
     end)
 end
 
 local function enterSelection()
+    selectionSession = selectionSession + 1
+    local session = selectionSession
+
     selectingChar = true
     isChoosing = true
+    menuOpen = false
+    loadingCharacter = false
+    loadRequestPending = false
     previewToken = previewToken + 1
+
+    setNativeLoadingScreen(false)
+    setLoadingOverlay(false)
+    pcall(ClearFocus)
     deletePreviewPed()
-
+    skyCam(false)
     SetNuiFocus(false, false)
-    DisplayRadar(false)
-    DoScreenFadeOut(10)
-    Wait(1000)
+    SendNUIMessage({ action = 'selectionReset' })
 
-    RequestImap(-1699673416)
-    RequestImap(1679934574)
-    RequestImap(183712523)
-    GetInteriorAtCoords(PLAYER_STAGE.x, PLAYER_STAGE.y, PLAYER_STAGE.z)
+    -- Let the server save the real gameplay location before this client is moved
+    -- to the fixed selector stage. This also safely logs out external flows.
+    Node7Core.Functions.TriggerCallback('node7-charselect:server:prepareSelection', function()
+        if session ~= selectionSession then return end
 
-    hidePlayerAtOriginalStage()
-    Wait(1500)
+        DisplayRadar(false)
+        DoScreenFadeOut(10)
+        Wait(1000)
 
-    ShutdownLoadingScreen()
-    ShutdownLoadingScreenNui()
+        if session ~= selectionSession then return end
 
-    if Config.UseSelectionWeather and GetResourceState(Config.SelectionWeatherResource) == 'started' then
-        pcall(function()
-            exports[Config.SelectionWeatherResource]:setMyTime(Config.SelectionHour, 0, 0, 0, true)
-            exports[Config.SelectionWeatherResource]:setMyWeather(Config.SelectionWeather, 10.0, false, false)
-        end)
-    end
+        RequestImap(-1699673416)
+        RequestImap(1679934574)
+        RequestImap(183712523)
+        GetInteriorAtCoords(PLAYER_STAGE.x, PLAYER_STAGE.y, PLAYER_STAGE.z)
 
-    openCharMenu(true)
+        hidePlayerAtOriginalStage()
+        Wait(1500)
+
+        if session ~= selectionSession then return end
+
+        ShutdownLoadingScreen()
+        ShutdownLoadingScreenNui()
+        nativeLoadingActive = false
+
+        if Config.UseSelectionWeather and GetResourceState(Config.SelectionWeatherResource) == 'started' then
+            pcall(function()
+                exports[Config.SelectionWeatherResource]:setMyTime(Config.SelectionHour, 0, 0, 0, true)
+                exports[Config.SelectionWeatherResource]:setMyWeather(Config.SelectionWeather, 10.0, false, false)
+            end)
+        end
+
+        openCharMenu(true, session)
+    end)
 end
 
 RegisterNetEvent('node7-charselect:client:chooseChar', enterSelection)
@@ -192,11 +325,15 @@ RegisterNetEvent('node7-charselect:client:chooseChar', enterSelection)
 RegisterNetEvent('node7-charselect:client:closeNUI', function()
     menuOpen = false
     SetNuiFocus(false, false)
-    SendNUIMessage({ action = 'ui', toggle = false })
     isChoosing = false
 end)
 
 RegisterNUICallback('cDataPed', function(data, cb)
+    if loadingCharacter or loadRequestPending then
+        cb({ ok = false })
+        return
+    end
+
     previewToken = previewToken + 1
     local token = previewToken
     local character = data and data.cData
@@ -210,7 +347,7 @@ RegisterNUICallback('cDataPed', function(data, cb)
     end
 
     Node7Core.Functions.TriggerCallback('node7-charselect:server:getAppearance', function(appearance)
-        if token ~= previewToken then return end
+        if token ~= previewToken or loadingCharacter then return end
 
         local skin = type(appearance) == 'table' and appearance.skin or nil
         local clothes = type(appearance) == 'table' and appearance.clothes or nil
@@ -238,6 +375,11 @@ RegisterNUICallback('disconnectButton', function(_, cb)
 end)
 
 RegisterNUICallback('selectCharacter', function(data, cb)
+    if loadingCharacter or loadRequestPending then
+        cb({ ok = false, message = 'A character is already loading.' })
+        return
+    end
+
     local character = data and data.cData
     if not character or not character.citizenid then
         notify('Select a valid character.', 'error')
@@ -245,6 +387,7 @@ RegisterNUICallback('selectCharacter', function(data, cb)
         return
     end
 
+    loadRequestPending = true
     selectingChar = false
     previewToken = previewToken + 1
     TriggerServerEvent('node7-charselect:server:loadUserData', character.citizenid)
@@ -264,6 +407,11 @@ RegisterNUICallback('removeBlur', function(_, cb)
 end)
 
 RegisterNUICallback('createNewCharacter', function(data, cb)
+    if loadingCharacter or loadRequestPending then
+        cb({ ok = false, message = 'A character is already loading.' })
+        return
+    end
+
     data = type(data) == 'table' and data or {}
     local slot = tonumber(data.cid)
     if not slot then
@@ -271,6 +419,7 @@ RegisterNUICallback('createNewCharacter', function(data, cb)
         return
     end
 
+    loadRequestPending = true
     TriggerServerEvent('node7-charselect:server:createCharacter', {
         cid = slot,
         firstname = data.firstname,
@@ -283,6 +432,11 @@ RegisterNUICallback('createNewCharacter', function(data, cb)
 end)
 
 RegisterNUICallback('removeCharacter', function(data, cb)
+    if loadingCharacter or loadRequestPending then
+        cb({ ok = false, message = 'Wait for the current action to finish.' })
+        return
+    end
+
     if not Config.AllowDelete then
         cb({ ok = false, message = 'Character deletion is disabled.' })
         return
@@ -299,6 +453,7 @@ RegisterNUICallback('removeCharacter', function(data, cb)
 end)
 
 RegisterNetEvent('node7-charselect:client:createResult', function(success, message)
+    loadRequestPending = false
     if not success then
         notify(message or 'Character could not be created.', 'error')
         SendNUIMessage({ action = 'createResult', success = false, message = message })
@@ -315,19 +470,27 @@ RegisterNetEvent('node7-charselect:client:deleteResult', function(success, messa
     end
 end)
 
-local function decodePosition(position)
-    if type(position) == 'string' then
-        local ok, decoded = pcall(json.decode, position)
-        if ok then position = decoded end
-    end
-    position = type(position) == 'table' and position or {}
-    return {
-        x = tonumber(position.x or position[1]) or Config.DefaultSpawn.x,
-        y = tonumber(position.y or position[2]) or Config.DefaultSpawn.y,
-        z = tonumber(position.z or position[3]) or Config.DefaultSpawn.z,
-        w = tonumber(position.w or position.h or position.heading or position[4]) or Config.DefaultSpawn.w,
-    }
-end
+RegisterNetEvent('node7-charselect:client:prepareCharacterLoad', function(token, rawPosition, isNew)
+    if loadingCharacter then return end
+
+    loadingCharacter = true
+    loadRequestPending = false
+    menuOpen = false
+    isChoosing = false
+    selectingChar = false
+    previewToken = previewToken + 1
+
+    local position = decodePosition(rawPosition)
+    SetNuiFocus(false, false)
+    setLoadingOverlay(true, isNew == true)
+    setNativeLoadingScreen(true, 'YOU ARE WAKING UP', isNew and 'Beginning your story' or 'Returning to your last location')
+    deletePreviewPed()
+    skyCam(false)
+    prepareHiddenPlayerForSpawn(position)
+
+    Wait(500)
+    TriggerServerEvent('node7-charselect:server:readyForCharacterLoad', token)
+end)
 
 RegisterNetEvent('node7-charselect:client:spawnCharacter', function(playerData, appearance)
     menuOpen = false
@@ -337,8 +500,10 @@ RegisterNetEvent('node7-charselect:client:spawnCharacter', function(playerData, 
 
     deletePreviewPed()
     SetNuiFocus(false, false)
-    SendNUIMessage({ action = 'ui', toggle = false })
     skyCam(false)
+
+    local position = decodePosition(playerData and playerData.position)
+    prepareHiddenPlayerForSpawn(position)
 
     local skin = type(appearance) == 'table' and appearance.skin or nil
     local clothes = type(appearance) == 'table' and appearance.clothes or nil
@@ -353,25 +518,42 @@ RegisterNetEvent('node7-charselect:client:spawnCharacter', function(playerData, 
 
     Wait(250)
     local ped = PlayerPedId()
-    local position = decodePosition(playerData and playerData.position)
-    RequestCollisionAtCoord(position.x, position.y, position.z)
-    SetEntityCollision(ped, true, true)
+    prepareHiddenPlayerForSpawn(position)
+    waitForSpawnCollision(ped, position)
+
+    ped = PlayerPedId()
     SetEntityCoords(ped, position.x, position.y, position.z, false, false, false, false)
     SetEntityHeading(ped, position.w)
+    SetEntityCollision(ped, true, true)
     FreezeEntityPosition(ped, false)
     SetEntityInvincible(ped, false)
     SetBlockingOfNonTemporaryEvents(ped, false)
     SetEntityAlpha(ped, 255, false)
     SetEntityVisible(ped, true, false)
     pcall(function() NetworkSetEntityInvisibleToNetwork(ped, false) end)
+
+    DoScreenFadeIn(350)
+    TriggerEvent('Node7Core:Client:OnPlayerLoaded')
     DisplayRadar(true)
 
-    TriggerEvent('Node7Core:Client:OnPlayerLoaded')
-    DoScreenFadeIn(700)
+    Wait(650)
+    stopCharacterLoading(true)
 end)
 
 RegisterNetEvent('node7-charselect:client:serverError', function(message)
+    loadRequestPending = false
     notify(message or 'Character action failed.', 'error')
+
+    if loadingCharacter then
+        stopCharacterLoading(false)
+        CreateThread(function()
+            Wait(150)
+            enterSelection()
+        end)
+        return
+    end
+
+    SendNUIMessage({ action = 'characterLoadFailed', message = message })
     SendNUIMessage({ action = 'createResult', success = false, message = message })
     SetNuiFocus(true, true)
 end)
@@ -379,6 +561,7 @@ end)
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     deletePreviewPed()
+    stopCharacterLoading(true)
     SetNuiFocus(false, false)
     skyCam(false)
     local ped = PlayerPedId()
@@ -392,7 +575,15 @@ end)
 CreateThread(function()
     repeat Wait(250) until NetworkIsPlayerActive(PlayerId())
     Wait(500)
-    enterSelection()
+
+    local hasLoadedCharacter = false
+    pcall(function()
+        local playerData = Node7Core.Functions.GetPlayerData()
+        hasLoadedCharacter = type(playerData) == 'table' and playerData.citizenid ~= nil
+    end)
+    if not hasLoadedCharacter then
+        enterSelection()
+    end
 
     while true do
         if isChoosing then
