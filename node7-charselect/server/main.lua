@@ -1,702 +1,333 @@
-local RESOURCE = GetCurrentResourceName()
-local newlyCreatedBySource = {}
-local lastPositionBySource = {}
-local lastPositionSaveAt = {}
+local Node7Core = exports['node7-core']:GetCoreObject()
+local RESOURCE_NAME = GetCurrentResourceName()
 
-local function cfg()
-    return Node7CharselectConfig or {}
+local function notify(source, message, notifyType)
+    Node7Core.Functions.Notify(source, {
+        title = 'NODE7 CHARSELECT',
+        description = tostring(message or 'Character action failed.'),
+        type = notifyType or 'info',
+        duration = 5000,
+    })
 end
 
-local function debugPrint(message)
-    if cfg().Debug then
-        print(('^3[node7-charselect]^7 %s'):format(tostring(message)))
-    end
-end
-
-local function getCore()
-    if GetResourceState('node7-core') ~= 'started' then return nil end
-    local ok, core = pcall(function()
-        return exports['node7-core']:GetCoreObject()
-    end)
-    if ok and type(core) == 'table' then return core end
-    return nil
-end
-
-local function playersResourceReady()
-    return GetResourceState('node7-players') == 'started'
-end
-
-local function callPlayers(exportName, ...)
-    if not playersResourceReady() then return false, 'node7_players_not_started' end
-    local exportTable = exports['node7-players']
-    if not exportTable or not exportTable[exportName] then return false, ('missing_export_%s'):format(exportName) end
-    local ok, result, extra = pcall(exportTable[exportName], ...)
-    if not ok then return false, result end
-    return result, extra
-end
-
-local function decodeJson(value, fallback)
+local function decode(value, fallback)
     if type(value) == 'table' then return value end
-    if value == nil or value == '' then return fallback end
-    if type(value) ~= 'string' then return fallback end
+    if type(value) ~= 'string' or value == '' then return fallback end
     local ok, decoded = pcall(json.decode, value)
-    if ok and decoded ~= nil then return decoded end
-    return fallback
+    return ok and decoded or fallback
 end
 
-local function encodeJson(value, fallback)
-    local ok, encoded = pcall(json.encode, value or fallback or {})
-    if ok and encoded then return encoded end
-    return '{}'
+local function trim(value)
+    return tostring(value or ''):gsub('[%c]', ''):gsub('^%s+', ''):gsub('%s+$', '')
 end
 
-local function safeDb(fn, fallback)
-    local ok, result = pcall(fn)
-    if ok then return result end
-    print(('^1[node7-charselect]^7 database/core operation failed: %s'):format(tostring(result)))
-    return fallback
+local function normalizeName(value, minimum, maximum)
+    value = trim(value)
+    if #value < minimum or #value > maximum then return nil end
+    if not value:match("^[%a][%a%-%' ]*$") then return nil end
+    return value:gsub("(%a)([%w']*)", function(first, rest)
+        return first:upper() .. rest:lower()
+    end)
 end
 
-local function getDefaultMoney(core)
-    local defaults = (((core or {}).Config or {}).Money or {}).MoneyTypes or nil
-    local money = {}
-    if type(defaults) == 'table' then
-        for name, amount in pairs(defaults) do money[name] = tonumber(amount) or 0 end
-    end
-    if next(money) == nil then money = { cash = 50, bank = 0, bloodmoney = 0 } end
-    return money
+local function validBirthdate(value)
+    value = trim(value)
+    local year, month, day = value:match('^(%d%d%d%d)%-(%d%d)%-(%d%d)$')
+    year, month, day = tonumber(year), tonumber(month), tonumber(day)
+    if not year or not month or not day then return nil end
+    if year < Config.Identity.minimumBirthYear or year > Config.Identity.maximumBirthYear then return nil end
+    if month < 1 or month > 12 or day < 1 or day > 31 then return nil end
+
+    local days = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    if year % 4 == 0 and (year % 100 ~= 0 or year % 400 == 0) then days[2] = 29 end
+    if day > days[month] then return nil end
+
+    return ('%04d-%02d-%02d'):format(year, month, day)
 end
 
-local function getDefaultJob(core)
-    local jobs = (((core or {}).Shared or {}).Jobs or {})
-    if jobs.unemployed then
-        return {
-            name = 'unemployed',
-            label = jobs.unemployed.label or 'Civilian',
-            payment = 10,
-            type = jobs.unemployed.type or 'none',
-            onduty = jobs.unemployed.defaultDuty or false,
-            isboss = false,
-            grade = { name = 'Freelancer', level = 0 }
-        }
-    end
-    return { name = 'unemployed', label = 'Civilian', payment = 10, type = 'none', onduty = false, isboss = false, grade = { name = 'Freelancer', level = 0 } }
+local function getLicense(source)
+    return Node7Core.Functions.GetIdentifier(source, 'license') or GetPlayerIdentifierByType(source, 'license')
 end
 
-local function getDefaultGang()
-    return { name = 'none', label = 'No Gang Affiliation', isboss = false, grade = { name = 'none', level = 0 } }
+local function compactCharacter(row)
+    row.charinfo = decode(row.charinfo, {})
+    row.money = decode(row.money, {})
+    row.job = decode(row.job, { name = 'unemployed', label = 'Civilian', grade = { level = 0 } })
+    row.gang = decode(row.gang, { name = 'none', label = 'No Gang Affiliation', grade = { level = 0 } })
+    row.metadata = decode(row.metadata, {})
+    row.position = decode(row.position, Config.DefaultSpawn)
+    row.cid = tonumber(row.cid or row.slot) or 1
+    row.slot = tonumber(row.slot or row.cid) or row.cid
+    row.job.label = row.job.label or row.job.name or 'Civilian'
+    row.gang.label = row.gang.label or row.gang.name or 'No Gang Affiliation'
+    row.money.cash = tonumber(row.money.cash) or 0
+    row.money.bank = tonumber(row.money.bank) or 0
+    row.money.bloodmoney = tonumber(row.money.bloodmoney) or 0
+    return row
 end
 
-local function getDefaultMetadata()
-    return { health = 600, hunger = 100, thirst = 100, cleanliness = 100, stress = 0, isdead = false, armor = 0, ishandcuffed = false, injail = 0, jailitems = {}, status = {}, rep = {}, callsign = 'NO CALLSIGN' }
-end
-
-
-local function normalizeGrade(grade)
-    if type(grade) == 'table' then
-        return {
-            name = grade.name or 'No Grades',
-            level = tonumber(grade.level or grade.grade or grade[1]) or 0,
-            payment = tonumber(grade.payment) or 0,
-            isboss = grade.isboss == true
-        }
-    end
-    return { name = 'No Grades', level = tonumber(grade) or 0, payment = 0, isboss = false }
-end
-
-local function normalizeJob(job)
-    if type(job) ~= 'table' then return getDefaultJob(getCore()) end
-    if type(job.grade) ~= 'table' then job.grade = normalizeGrade(job.grade or 0) end
-    job.name = tostring(job.name or 'unemployed'):lower()
-    job.label = job.label or 'Civilian'
-    job.payment = tonumber(job.payment or job.grade.payment) or 0
-    job.type = job.type or 'none'
-    job.onduty = job.onduty == true
-    job.isboss = job.isboss == true or job.grade.isboss == true
-    return job
-end
-
-local function normalizeGang(gang)
-    if type(gang) ~= 'table' then return getDefaultGang() end
-    if type(gang.grade) ~= 'table' then gang.grade = normalizeGrade(gang.grade or 0) end
-    gang.name = tostring(gang.name or 'none'):lower()
-    gang.label = gang.label or 'No Gang Affiliation'
-    gang.isboss = gang.isboss == true or gang.grade.isboss == true
-    return gang
-end
-
-local function generateCitizenId(core)
-    if core and core.Player and core.Player.CreateCitizenId then
-        local ok, citizenid = pcall(core.Player.CreateCitizenId)
-        if ok and citizenid and citizenid ~= '' then return tostring(citizenid) end
-    end
-    local chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    local nums = '0123456789'
-    for _ = 1, 25 do
-        local id = ''
-        for i = 1, 3 do
-            local n = math.random(1, #chars)
-            id = id .. chars:sub(n, n)
-        end
-        for i = 1, 5 do
-            local n = math.random(1, #nums)
-            id = id .. nums:sub(n, n)
-        end
-        local existing = safeDb(function()
-            return MySQL.scalar.await('SELECT citizenid FROM players WHERE citizenid = ? LIMIT 1', { id })
-        end, nil)
-        if not existing then return id end
-    end
-    return ('N7%s%s'):format(os.time(), math.random(1000, 9999))
-end
-
-local function sanitizeText(value, maxLength, fallback)
-    value = tostring(value or fallback or ''):gsub('[%c]', ''):match('^%s*(.-)%s*$') or ''
-    if value == '' then value = tostring(fallback or '') end
-    if #value > maxLength then value = value:sub(1, maxLength) end
-    return value
-end
-
-local function normalizeGender(value)
-    local raw = tostring(value or ''):lower():match('^%s*(.-)%s*$') or ''
-    if raw == 'female' or raw == 'woman' or raw == 'f' or raw == '0' then return 0 end
-    return 1 -- RSG format: 1 male, 0 female
-end
-
-local function genderName(value)
-    return normalizeGender(value) == 0 and 'female' or 'male'
-end
-
-local function getLicense(src)
-    local core = getCore()
-    if core and core.Functions and core.Functions.GetIdentifier then
-        local ok, license = pcall(core.Functions.GetIdentifier, src, 'license')
-        if ok and license then return license end
-    end
-    return GetPlayerIdentifierByType(src, 'license') or GetPlayerIdentifier(src, 0)
-end
-
-local function compactCharacter(character)
-    if type(character) ~= 'table' then return nil end
-    character.charinfo = decodeJson(character.charinfo, {}) or {}
-    character.money = decodeJson(character.money, {}) or {}
-    character.job = normalizeJob(decodeJson(character.job, {}) or {})
-    character.gang = normalizeGang(decodeJson(character.gang, {}) or {})
-    character.metadata = decodeJson(character.metadata, {}) or {}
-    character.position = decodeJson(character.position, character.position)
-    character.cid = tonumber(character.cid or character.slot) or 1
-    character.slot = tonumber(character.slot or character.cid) or character.cid
-    if character.charinfo.gender ~= nil then
-        character.charinfo.gender = normalizeGender(character.charinfo.gender)
-    end
-    return character
-end
-
-local function queryCharacters(src)
-    local license = getLicense(src)
-    if not license then return {}, 'missing_license' end
-
-    local rows = safeDb(function()
-        return MySQL.query.await('SELECT * FROM players WHERE license = ? ORDER BY COALESCE(slot, cid, 1), cid', { license })
-    end, nil)
-
-    if not rows then
-        rows = safeDb(function()
-            return MySQL.query.await('SELECT * FROM players WHERE license = ?', { license })
-        end, {})
-    end
-
+local function getCharacters(source)
+    local license = getLicense(source)
+    if not license then return {} end
+    local rows = MySQL.query.await('SELECT * FROM players WHERE license = ? ORDER BY slot ASC, cid ASC', { license }) or {}
     local characters = {}
-    for _, row in ipairs(rows or {}) do
+    for _, row in ipairs(rows) do
         characters[#characters + 1] = compactCharacter(row)
     end
-
-    table.sort(characters, function(a, b)
-        return (tonumber(a.slot or a.cid) or 1) < (tonumber(b.slot or b.cid) or 1)
-    end)
-
     return characters
 end
 
-local function getCharacters(src)
-    local chars, err = queryCharacters(src)
-    if chars then return chars end
-
-    local result, playersErr = callPlayers('GetCharacters', src)
-    if result == false then return {}, tostring(playersErr or err or 'characters_failed') end
-
-    local characters = {}
-    if type(result) == 'table' then
-        for _, character in ipairs(result) do
-            characters[#characters + 1] = compactCharacter(character)
-        end
-    end
-    return characters
+local function characterOwnedBy(source, citizenid)
+    local license = getLicense(source)
+    if not license or not citizenid then return false end
+    return MySQL.scalar.await('SELECT license FROM players WHERE citizenid = ? LIMIT 1', { citizenid }) == license
 end
 
-local function sendCharacters(src, requestId)
-    local characters, err = getCharacters(src)
-    TriggerClientEvent('node7-charselect:client:characters', src, requestId, characters or {}, cfg().DefaultNumberOfCharacters or 4, err)
-end
-
-local function normalizeCharacterPayload(payload)
-    payload = type(payload) == 'table' and payload or {}
-    local charinfo = type(payload.charinfo) == 'table' and payload.charinfo or payload
-    return {
-        slot = tonumber(payload.slot or payload.cid) or nil,
-        charinfo = {
-            firstname = sanitizeText(charinfo.firstname or charinfo.firstName, 50, 'Unknown'),
-            lastname = sanitizeText(charinfo.lastname or charinfo.lastName, 50, 'Unknown'),
-            birthdate = sanitizeText(charinfo.birthdate or charinfo.dateOfBirth, 20, '1900-01-01'),
-            gender = normalizeGender(charinfo.gender or charinfo.sex),
-            nationality = sanitizeText(charinfo.nationality, 50, 'American'),
-            backstory = sanitizeText(charinfo.backstory or '', 2000, '')
-        }
-    }
-end
-
-local function unloadCurrent(src, save)
-    local core = getCore()
-    if core and core.Functions and core.Functions.GetPlayer then
-        local player = core.Functions.GetPlayer(src)
-        if player and player.Functions then
-            if save ~= false and core.Player and core.Player.Save then
-                pcall(core.Player.Save, src)
-            end
-            if core.Player and core.Player.Logout then
-                pcall(core.Player.Logout, src)
-            elseif player.Functions.Logout then
-                pcall(player.Functions.Logout)
-            end
-        end
-    end
-
-    if playersResourceReady() then
-        local okLoaded, loaded = pcall(function() return exports['node7-players']:IsLoaded(src) end)
-        if okLoaded and loaded then
-            pcall(function() exports['node7-players']:UnloadPlayer(src, save ~= false) end)
-        end
-    end
-end
-
-local function createWithCore(src, data)
-    local core = getCore()
-    local license = getLicense(src)
-    if not license then return nil, 'missing_license' end
-
-    local existing = safeDb(function()
-        return MySQL.scalar.await('SELECT citizenid FROM players WHERE license = ? AND COALESCE(slot, cid, 1) = ? LIMIT 1', { license, data.slot })
-    end, nil)
-    if existing then return nil, 'slot_taken' end
-
-    local citizenid = generateCitizenId(core)
-    local playerData = {
-        citizenid = citizenid,
-        cid = data.slot,
-        slot = data.slot,
-        license = license,
-        name = GetPlayerName(src) or ('Player %s'):format(src),
-        money = getDefaultMoney(core),
-        charinfo = data.charinfo,
-        job = getDefaultJob(core),
-        gang = getDefaultGang(),
-        position = cfg().DefaultSpawn or { x = -325.06, y = 773.62, z = 117.43, w = 286.0 },
-        metadata = getDefaultMetadata(),
-        weight = 35000,
-        slots = 25
-    }
-
-    local inserted = safeDb(function()
-        return MySQL.insert.await('INSERT INTO players (citizenid, cid, slot, license, name, money, charinfo, job, gang, position, metadata, weight, slots) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', {
-            playerData.citizenid,
-            playerData.cid,
-            playerData.slot,
-            playerData.license,
-            playerData.name,
-            encodeJson(playerData.money),
-            encodeJson(playerData.charinfo),
-            encodeJson(playerData.job),
-            encodeJson(playerData.gang),
-            encodeJson(playerData.position),
-            encodeJson(playerData.metadata),
-            playerData.weight,
-            playerData.slots
-        })
-    end, false)
-
-    if not inserted then
-        local minimal = safeDb(function()
-            return MySQL.insert.await('INSERT INTO players (citizenid, cid, slot, license, name, money, charinfo, job, gang, position, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', {
-                playerData.citizenid,
-                playerData.cid,
-                playerData.slot,
-                playerData.license,
-                playerData.name,
-                encodeJson(playerData.money),
-                encodeJson(playerData.charinfo),
-                encodeJson(playerData.job),
-                encodeJson(playerData.gang),
-                encodeJson(playerData.position),
-                encodeJson(playerData.metadata)
-            })
-        end, false)
-        if not minimal then return nil, 'db_insert_failed' end
-    end
-
-    return compactCharacter(playerData)
-end
-
-local function createCharacter(src, data)
-    local core = getCore()
-    if core then
-        local created, err = createWithCore(src, data)
-        if created then return created end
-        return nil, err
-    end
-
-    local created, err = callPlayers('CreateCharacter', src, data)
-    if created then return compactCharacter(created) end
-    return nil, tostring(err or 'create_failed')
-end
-
-local function loadWithCore(src, citizenid)
-    local core = getCore()
-    local license = getLicense(src)
-    if not license then return nil, 'missing_license' end
-
-    unloadCurrent(src, true)
-
-    local row = safeDb(function()
-        return MySQL.single.await('SELECT * FROM players WHERE citizenid = ? LIMIT 1', { citizenid })
-    end, nil)
-    if not row then return nil, 'character_not_found' end
-    if row.license and row.license ~= license then return nil, 'license_mismatch' end
-
-    local playerData = compactCharacter(row)
-    local persistedPosition = playerData.position
-    playerData.source = src
-    playerData.license = license
-    playerData.name = GetPlayerName(src) or playerData.name or ('Player %s'):format(src)
-
-    if core and core.Player and core.Player.CheckPlayerData then
-        local ok, playerObject = pcall(core.Player.CheckPlayerData, src, playerData)
-        if ok then
-            local loadedData = playerData
-            if playerObject and playerObject.PlayerData then
-                playerObject.PlayerData.position = persistedPosition
-                loadedData = playerObject.PlayerData
-            elseif core.Functions and core.Functions.GetPlayer then
-                local gotOk, loadedPlayer = pcall(core.Functions.GetPlayer, src)
-                if gotOk and loadedPlayer and loadedPlayer.PlayerData then
-                    loadedPlayer.PlayerData.position = persistedPosition
-                    loadedData = loadedPlayer.PlayerData
-                end
-            end
-
-            -- node7-core saves once while creating the player object using the selection-scene ped.
-            -- Restore the actual persisted location immediately so the database never keeps that scene position.
-            Wait(150)
-            safeDb(function()
-                return MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ?', {
-                    encodeJson(persistedPosition), citizenid
-                })
-            end, false)
-            return compactCharacter(loadedData)
-        end
-        print(('^1[node7-charselect]^7 core player load failed, using safe player data: %s'):format(tostring(playerObject)))
-    end
-
-    return playerData
-end
-
-local function loadCharacter(src, citizenid)
-    if getCore() then
-        return loadWithCore(src, citizenid)
-    end
-
-    local player, err = callPlayers('LoadCharacter', src, citizenid)
-    if player then return compactCharacter(player.PlayerData or player) end
-    return nil, tostring(err or 'load_failed')
-end
-
-local function deleteWithCore(src, citizenid)
-    local core = getCore()
-    if not core or not core.Player or not core.Player.DeleteCharacter then return false, 'node7_core_player_api_missing' end
-    local ok, err = pcall(core.Player.DeleteCharacter, src, citizenid)
-    if not ok then return false, tostring(err) end
-    return true
-end
-
-local function deleteCharacter(src, citizenid)
-    if getCore() then return deleteWithCore(src, citizenid) end
-    local success, err = callPlayers('DeleteCharacter', src, citizenid)
-    if success then return true end
-    return false, tostring(err or 'delete_failed')
-end
-
-local function eventError(src, requestId, eventName, err)
-    local message = tostring(err or 'server_error')
-    print(('^1[node7-charselect]^7 %s'):format(message))
-    TriggerClientEvent(eventName, src, requestId or 0, false, message)
-end
-
-RegisterNetEvent('node7-charselect:server:beginSelection', function()
-    local src = source
-    local ok, err = pcall(function()
-        unloadCurrent(src, true)
-        sendCharacters(src, 0)
+local function getAppearance(citizenid)
+    if GetResourceState('node7-appearance') ~= 'started' then return nil end
+    local ok, appearance = pcall(function()
+        return exports['node7-appearance']:GetAppearance(citizenid)
     end)
-    if not ok then
-        print(('^1[node7-charselect]^7 beginSelection failed: %s'):format(tostring(err)))
-        TriggerClientEvent('node7-charselect:client:characters', src, 0, {}, cfg().DefaultNumberOfCharacters or 4, tostring(err))
-    end
-end)
+    return ok and type(appearance) == 'table' and appearance or nil
+end
 
-RegisterNetEvent('node7-charselect:server:requestCharacters', function(requestId)
-    local src = source
-    local ok, err = pcall(function()
-        sendCharacters(src, requestId)
+local function saveDefaultAppearance(citizenid, gender)
+    if GetResourceState('node7-appearance') ~= 'started' then return false end
+    local skin = gender == 1 and Config.DefaultAppearance.female or Config.DefaultAppearance.male
+    local okSkin, skinSaved = pcall(function()
+        return exports['node7-appearance']:SaveSkin(citizenid, skin)
     end)
-    if not ok then
-        print(('^1[node7-charselect]^7 requestCharacters failed: %s'):format(tostring(err)))
-        TriggerClientEvent('node7-charselect:client:characters', src, requestId, {}, cfg().DefaultNumberOfCharacters or 4, tostring(err))
-    end
-end)
-
-
-RegisterNetEvent('node7-charselect:server:createCharacter', function(requestId, payload)
-    local src = source
-    local ok, err = pcall(function()
-        local data = normalizeCharacterPayload(payload)
-        if not data.slot then
-            TriggerClientEvent('node7-charselect:client:createResult', src, requestId, false, 'missing_slot')
-            return
-        end
-
-        local created, createErr = createCharacter(src, data)
-        if not created then
-            TriggerClientEvent('node7-charselect:client:createResult', src, requestId, false, tostring(createErr or 'create_failed'))
-            return
-        end
-
-        newlyCreatedBySource[src] = tostring(created.citizenid or '')
-        TriggerClientEvent('node7-charselect:client:createResult', src, requestId, true, compactCharacter(created))
-        sendCharacters(src, 0)
+    local okClothes, clothesSaved = pcall(function()
+        return exports['node7-appearance']:SaveClothes(citizenid, {})
     end)
-    if not ok then eventError(src, requestId, 'node7-charselect:client:createResult', err) end
+    return okSkin and skinSaved ~= false and okClothes and clothesSaved ~= false
+end
+
+local function getCharacterLimit(source)
+    local license = getLicense(source)
+    for _, entry in ipairs(Config.PlayersNumberOfCharacters or {}) do
+        if entry.license == license then
+            return math.max(1, math.min(tonumber(entry.numberOfChars) or Config.DefaultNumberOfCharacters, 5))
+        end
+    end
+    return math.max(1, math.min(tonumber(Config.DefaultNumberOfCharacters) or 5, 5))
+end
+
+Node7Core.Functions.CreateCallback('node7-charselect:server:GetNumberOfCharacters', function(source, cb)
+    cb(getCharacterLimit(source))
 end)
 
-RegisterNetEvent('node7-charselect:server:selectCharacter', function(requestId, citizenid)
-    local src = source
-    local ok, err = pcall(function()
-        citizenid = tostring(citizenid or '')
-        if citizenid == '' then
-            TriggerClientEvent('node7-charselect:client:selectResult', src, requestId, false, 'missing_citizenid')
-            return
-        end
-
-        local data, loadErr = loadCharacter(src, citizenid)
-        if not data then
-            TriggerClientEvent('node7-charselect:client:selectResult', src, requestId, false, tostring(loadErr or 'load_failed'))
-            return
-        end
-
-        local created = newlyCreatedBySource[src] == citizenid
-        newlyCreatedBySource[src] = nil
-
-        debugPrint(('Loaded %s for %s'):format(tostring(data.citizenid), tostring(src)))
-        TriggerClientEvent('node7-charselect:client:selectResult', src, requestId, true, data, created)
-    end)
-    if not ok then eventError(src, requestId, 'node7-charselect:client:selectResult', err) end
+Node7Core.Functions.CreateCallback('node7-charselect:server:setupCharacters', function(source, cb)
+    cb(getCharacters(source))
 end)
 
-RegisterNetEvent('node7-charselect:server:deleteCharacter', function(requestId, citizenid)
-    local src = source
-    local ok, err = pcall(function()
-        citizenid = tostring(citizenid or '')
-        if citizenid == '' then
-            TriggerClientEvent('node7-charselect:client:deleteResult', src, requestId, false, 'missing_citizenid')
-            return
-        end
-
-        local success, deleteErr = deleteCharacter(src, citizenid)
-        if not success then
-            TriggerClientEvent('node7-charselect:client:deleteResult', src, requestId, false, tostring(deleteErr or 'delete_failed'))
-            return
-        end
-
-        TriggerClientEvent('node7-charselect:client:deleteResult', src, requestId, true)
-        sendCharacters(src, 0)
-    end)
-    if not ok then eventError(src, requestId, 'node7-charselect:client:deleteResult', err) end
-end)
-
-local function finiteNumber(value)
-    value = tonumber(value)
-    if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
-    return value
-end
-
-local function normalizePosition(position)
-    if type(position) ~= 'table' then return nil end
-    local normalized = {
-        x = finiteNumber(position.x),
-        y = finiteNumber(position.y),
-        z = finiteNumber(position.z),
-        w = finiteNumber(position.w or position.heading) or 0.0,
-        interior = math.floor(finiteNumber(position.interior or position.interiorId) or 0),
-        room = math.floor(finiteNumber(position.room or position.roomKey) or 0)
-    }
-    if not normalized.x or not normalized.y or not normalized.z then return nil end
-    if math.abs(normalized.x) > 20000.0 or math.abs(normalized.y) > 20000.0 or normalized.z < -1000.0 or normalized.z > 5000.0 then return nil end
-    normalized.isInterior = position.isInterior == true or normalized.interior ~= 0 or normalized.room ~= 0
-    return normalized
-end
-
-local function getCorePlayer(src)
-    local core = getCore()
-    if not core or not core.Functions or not core.Functions.GetPlayer then return core, nil end
-    local ok, player = pcall(core.Functions.GetPlayer, src)
-    return core, ok and player or nil
-end
-
-local function persistPosition(src, normalized)
-    local core, player = getCorePlayer(src)
-    if player and player.PlayerData and player.PlayerData.citizenid then
-        player.PlayerData.position = normalized
-        local affected = safeDb(function()
-            return MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ?', {
-                encodeJson(normalized), player.PlayerData.citizenid
-            })
-        end, false)
-        lastPositionBySource[src] = normalized
-        return affected ~= false
+Node7Core.Functions.CreateCallback('node7-charselect:server:getAppearance', function(source, cb, citizenid)
+    citizenid = trim(citizenid)
+    if citizenid == '' or not characterOwnedBy(source, citizenid) then
+        cb(nil)
+        return
     end
-
-    local ok = callPlayers('SetPosition', src, normalized)
-    if ok ~= false then lastPositionBySource[src] = normalized end
-    return ok ~= false
-end
-
-local function savePlayerPosition(src, position)
-    local normalized = normalizePosition(position)
-    if not normalized then return false end
-    return persistPosition(src, normalized)
-end
-
-local function saveCoreSnapshotAndLogout(src, normalized)
-    local core, player = getCorePlayer(src)
-    if not player or not player.PlayerData or not player.PlayerData.citizenid then return false end
-
-    if player.Functions and player.Functions.PersistStateBags then
-        pcall(player.Functions.PersistStateBags)
-    end
-
-    local data = player.PlayerData
-    data.position = normalized
-
-    if GetResourceState('node7-inventory') == 'started' then
-        pcall(function() exports['node7-inventory']:SaveInventory(src) end)
-    end
-
-    local saved = safeDb(function()
-        return MySQL.update.await([[
-            UPDATE players
-            SET name = ?, money = ?, charinfo = ?, job = ?, gang = ?, position = ?, metadata = ?, weight = ?, slots = ?
-            WHERE citizenid = ?
-        ]], {
-            data.name,
-            encodeJson(data.money),
-            encodeJson(data.charinfo),
-            encodeJson(data.job),
-            encodeJson(data.gang),
-            encodeJson(normalized),
-            encodeJson(data.metadata),
-            tonumber(data.weight) or 35000,
-            tonumber(data.slots) or 25,
-            data.citizenid
-        })
-    end, false)
-
-    if saved == false then return false end
-    lastPositionBySource[src] = normalized
-    if core and core.Player and core.Player.Logout then
-        pcall(core.Player.Logout, src)
-    elseif player.Functions and player.Functions.Logout then
-        pcall(player.Functions.Logout)
-    end
-    return true
-end
-
-RegisterNetEvent('node7-charselect:server:savePosition', function(position)
-    local src = source
-    local now = GetGameTimer()
-    if now - (lastPositionSaveAt[src] or 0) < 500 then return end
-    lastPositionSaveAt[src] = now
-    local ok, err = pcall(savePlayerPosition, src, position)
-    if not ok then debugPrint(('savePosition failed: %s'):format(tostring(err))) end
-end)
-
-RegisterNetEvent('node7-charselect:server:logout', function(position)
-    local src = source
-    newlyCreatedBySource[src] = nil
-    local normalized = normalizePosition(position) or lastPositionBySource[src]
-
-    local saved = false
-    if normalized then
-        local ok, result = pcall(saveCoreSnapshotAndLogout, src, normalized)
-        saved = ok and result == true
-    end
-
-    if not saved then
-        if normalized then pcall(persistPosition, src, normalized) end
-        pcall(unloadCurrent, src, true)
-        if normalized then
-            -- Final authoritative write after any fallback core save that may use stale server-ped coordinates.
-            Wait(350)
-            pcall(persistPosition, src, normalized)
-        end
-    end
-
-    lastPositionBySource[src] = nil
-    lastPositionSaveAt[src] = nil
-    TriggerClientEvent('node7-charselect:client:chooseChar', src)
+    cb(getAppearance(citizenid))
 end)
 
 RegisterNetEvent('node7-charselect:server:disconnect', function()
-    newlyCreatedBySource[source] = nil
-    DropPlayer(source, 'Disconnected from NODE7')
+    DropPlayer(source, Config.DisconnectMessage)
 end)
 
-AddEventHandler('playerDropped', function()
-    newlyCreatedBySource[source] = nil
-    lastPositionBySource[source] = nil
-    lastPositionSaveAt[source] = nil
+RegisterNetEvent('node7-charselect:server:loadUserData', function(citizenid)
+    local source = source
+    citizenid = trim(citizenid)
+    if citizenid == '' or not characterOwnedBy(source, citizenid) then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'Character ownership validation failed.')
+        return
+    end
+
+    local storedRow = MySQL.single.await('SELECT position FROM players WHERE citizenid = ? AND license = ? LIMIT 1', {
+        citizenid,
+        getLicense(source),
+    })
+    local storedPosition = storedRow and decode(storedRow.position, Config.DefaultSpawn) or Config.DefaultSpawn
+
+    if Node7Core.Functions.GetPlayer(source) then
+        Node7Core.Player.Logout(source)
+    end
+
+    if not Node7Core.Player.Login(source, citizenid) then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'Character could not be loaded.')
+        return
+    end
+
+    local player = Node7Core.Functions.GetPlayer(source)
+    if not player or not player.PlayerData then
+        TriggerClientEvent('node7-charselect:client:serverError', source, 'Character data was unavailable after login.')
+        return
+    end
+
+    player.PlayerData.position = storedPosition
+    TriggerClientEvent('node7-charselect:client:closeNUI', source)
+    TriggerClientEvent('node7-charselect:client:spawnCharacter', source, player.PlayerData, getAppearance(citizenid))
+end)
+
+RegisterNetEvent('node7-charselect:server:createCharacter', function(data)
+    local source = source
+    data = type(data) == 'table' and data or {}
+    local slot = tonumber(data.cid)
+
+    if not slot or slot < 1 or slot > getCharacterLimit(source) then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Invalid character slot.')
+        return
+    end
+
+    local license = getLicense(source)
+    local occupied = MySQL.scalar.await('SELECT citizenid FROM players WHERE license = ? AND slot = ? LIMIT 1', { license, slot })
+    if occupied then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'That character slot is already occupied.')
+        return
+    end
+
+    local firstname = normalizeName(data.firstname, Config.Identity.firstNameMin, Config.Identity.firstNameMax)
+    local lastname = normalizeName(data.lastname, Config.Identity.lastNameMin, Config.Identity.lastNameMax)
+    local birthdate = validBirthdate(data.birthdate)
+    local nationality = trim(data.nationality):sub(1, Config.Identity.nationalityMax)
+    local gender = tonumber(data.gender) == 1 and 1 or 0
+
+    if not firstname then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Enter a valid first name.')
+        return
+    end
+    if not lastname then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Enter a valid last name.')
+        return
+    end
+    if not birthdate then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Birthdate must be a real date using YYYY-MM-DD.')
+        return
+    end
+    if nationality == '' then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'Enter a nationality.')
+        return
+    end
+
+    if Node7Core.Functions.GetPlayer(source) then
+        Node7Core.Player.Logout(source)
+    end
+
+    local newData = {
+        cid = slot,
+        slot = slot,
+        charinfo = {
+            firstname = firstname,
+            lastname = lastname,
+            birthdate = birthdate,
+            gender = gender,
+            nationality = nationality,
+        },
+        position = {
+            x = Config.DefaultSpawn.x,
+            y = Config.DefaultSpawn.y,
+            z = Config.DefaultSpawn.z,
+            w = Config.DefaultSpawn.w,
+        },
+    }
+
+    if not Node7Core.Player.Login(source, false, newData) then
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The character could not be created.')
+        return
+    end
+
+    local player = Node7Core.Functions.GetPlayer(source)
+    local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+    if not citizenid then
+        Node7Core.Player.Logout(source)
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The new character ID was not created.')
+        return
+    end
+
+    if not saveDefaultAppearance(citizenid, gender) then
+        Node7Core.Player.Logout(source)
+        MySQL.query.await('DELETE FROM players WHERE citizenid = ? AND license = ?', { citizenid, license })
+        TriggerClientEvent('node7-charselect:client:createResult', source, false, 'The default NODE7 appearance could not be saved.')
+        return
+    end
+
+    local spawnPosition = {
+        x = Config.DefaultSpawn.x,
+        y = Config.DefaultSpawn.y,
+        z = Config.DefaultSpawn.z,
+        w = Config.DefaultSpawn.w,
+    }
+    player.PlayerData.position = spawnPosition
+    MySQL.update.await('UPDATE players SET position = ? WHERE citizenid = ? AND license = ?', {
+        json.encode(spawnPosition),
+        citizenid,
+        license,
+    })
+
+    TriggerClientEvent('node7-charselect:client:closeNUI', source)
+    TriggerClientEvent('node7-charselect:client:spawnCharacter', source, player.PlayerData, getAppearance(citizenid))
+    notify(source, ('Welcome, %s %s. Visit a clothing store to customize your character.'):format(firstname, lastname), 'success')
+end)
+
+local function tableExists(tableName)
+    local result = MySQL.scalar.await([[
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = ?
+    ]], { tableName })
+    return tonumber(result) and tonumber(result) > 0
+end
+
+RegisterNetEvent('node7-charselect:server:deleteCharacter', function(citizenid)
+    local source = source
+    citizenid = trim(citizenid)
+
+    if not Config.AllowDelete then
+        TriggerClientEvent('node7-charselect:client:deleteResult', source, false, 'Character deletion is disabled.')
+        return
+    end
+    if citizenid == '' or not characterOwnedBy(source, citizenid) then
+        TriggerClientEvent('node7-charselect:client:deleteResult', source, false, 'Character ownership validation failed.')
+        return
+    end
+
+    local relatedTables = {
+        'player_clothing_outfits',
+        'player_clothing',
+        'player_skins',
+        'playeroutfit',
+        'playerskins',
+        'player_weapons',
+        'address_book',
+        'telegrams',
+    }
+
+    for _, tableName in ipairs(relatedTables) do
+        if tableExists(tableName) then
+            MySQL.query.await(('DELETE FROM `%s` WHERE citizenid = ?'):format(tableName), { citizenid })
+        end
+    end
+
+    local deleted = MySQL.update.await('DELETE FROM players WHERE citizenid = ? AND license = ?', {
+        citizenid,
+        getLicense(source),
+    })
+    local success = tonumber(deleted) and tonumber(deleted) > 0
+    TriggerClientEvent(
+        'node7-charselect:client:deleteResult',
+        source,
+        success,
+        success and 'Character deleted.' or 'Character could not be deleted.'
+    )
 end)
 
 RegisterCommand('logout', function(source)
     if source <= 0 then return end
-    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
+    local player = Node7Core.Functions.GetPlayer(source)
+    if player and player.Functions then
+        player.Functions.Save()
+        Node7Core.Player.Logout(source)
+    end
+    TriggerClientEvent('node7-charselect:client:chooseChar', source)
 end, false)
 
-RegisterCommand('charselect', function(source)
-    if source <= 0 then return end
-    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
-end, false)
-
-RegisterCommand('characters', function(source)
-    if source <= 0 then return end
-    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
-end, false)
-
-AddEventHandler('onResourceStart', function(resource)
-    if resource ~= RESOURCE then return end
-    print('^2[node7-charselect]^7 Started v1.6.0 | no character preview | native fade handoff | interior-safe last location')
-end)
-
-exports('OpenCharacterSelect', function(source)
-    source = tonumber(source)
-    if not source or source <= 0 then return false end
-    TriggerClientEvent('node7-charselect:client:prepareLogout', source)
-    return true
-end)
+print(('[%s] started v5.0.0'):format(RESOURCE_NAME))

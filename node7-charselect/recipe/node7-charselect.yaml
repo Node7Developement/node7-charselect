@@ -1,14 +1,12 @@
-name: node7-charselect
-description: NODE7 RedM character selector with western roster UI, no centre preview, native fade handoff, and interior-safe exact last-location persistence.
+$engine: 3
+$onesync: on
+name: NODE7 Character Select
+version: 5.0.0
 author: NODE7 Development Studios
-version: 1.6.0
-
+description: NODE7 character selection using the supplied RSG UI and original preview placement.
 tasks:
-  - action: ensure
-    resource: oxmysql
-  - action: ensure
-    resource: node7-core
-  - action: ensure
-    resource: node7-appearance
-  - action: ensure
-    resource: node7-charselect
+  - action: ensure_dir
+    path: ./resources/[node7]/node7-charselect
+  - action: copy_path
+    src: ./node7-charselect
+    dest: ./resources/[node7]/node7-charselect

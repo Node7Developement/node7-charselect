@@ -1,22 +1,19 @@
-fx_version '1.0.13'
+fx_version 'cerulean'
 game 'rdr3'
+
 rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'
 
 lua54 'yes'
 
 author 'NODE7 Development Studios'
-description 'NODE7 Charselect - western roster UI, native fade handoff, and exact interior-safe last-location persistence'
-version '1.6.0'
+description 'NODE7 character selection using the supplied RSG multicharacter interface and original preview scene.'
+version '5.0.0'
 
 ui_page 'html/index.html'
 
-shared_scripts {
-    'config.lua'
-}
+shared_script 'config.lua'
 
-client_scripts {
-    'client/main.lua'
-}
+client_script 'client/main.lua'
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
@@ -25,13 +22,17 @@ server_scripts {
 
 files {
     'html/index.html',
-    'html/reset.css',
     'html/style.css',
+    'html/reset.css',
     'html/script.js',
+    'html/profanity.js',
+    'html/AD-Rsail.otf',
+    'html/CHINESER.TTF',
     'html/assets/*.png'
 }
 
 dependencies {
     'oxmysql',
-    'node7-core'
+    'node7-core',
+    'node7-appearance'
 }
