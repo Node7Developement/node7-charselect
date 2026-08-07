@@ -1,21 +1,13 @@
-[README.md](https://github.com/user-attachments/files/30717216/README.md)
+[README.md](https://github.com/user-attachments/files/30808553/README.md)
 # node7-charselect
 
-
-<img width="1920" height="994" alt="charseleeectionnnnn" src="https://github.com/user-attachments/assets/1edafb8e-5471-4c2d-a5bc-8f03cd50463c" />
-
-
-
-
-NODE7 character selection using the supplied RSG multicharacter interface and its original preview scene.
+NODE7 RedM character selection with a true nested side-panel flow, keyboard navigation, and no preview ped.
 
 ## Requirements
 
 - `oxmysql`
 - `node7-core`
 - `node7-appearance`
-
-The resource does **not** use `ox_lib` for character creation. Identity fields are entered directly in the existing character creation panel with text inputs and Male/Female buttons.
 
 ## Start order
 
@@ -26,10 +18,18 @@ ensure node7-appearance
 ensure node7-charselect
 ```
 
-## Flow
+## Nested flow
 
-- Existing characters load their skin and clothing only through `node7-appearance`.
-- The real player ped stays hidden at the original RSG staging coordinates.
-- A separate cloned preview ped stays at the original RSG preview coordinates.
-- New characters save a default male or female Node7 appearance and spawn at `Config.DefaultSpawn`.
-- Players can then visit the normal clothing/appearance locations to customize.
+- The roster is the root page. Opening a slot replaces it with that slot's nested page inside the same side panel.
+- Existing characters open a readable detail page with Enter County, Delete Character, and Back actions.
+- Empty slots open a four-page creation path: Name, Background, Gender, and Review.
+- Only the current nested page is visible, so the interface never needs a scrollbar.
+- Delete confirmation is its own nested page and returns to the selected character.
+- Arrow Up and Arrow Down move selection. Enter or Arrow Right opens/confirms. Arrow Left, Escape, or Backspace returns when appropriate.
+- Mouse selection remains available.
+- No character preview ped is created, cloned, dressed, moved, or displayed.
+- The real player ped remains hidden at the selector stage until a character is loaded.
+- Existing characters spawn at their stored gameplay position after appearance and collision finish loading.
+- New characters receive the configured default NODE7 appearance and spawn at `Config.DefaultSpawn`.
+- The native RedM loading screen and NODE7 fallback overlay remain active during the final spawn handoff.
+- Logout saves the gameplay position before returning to character selection.
