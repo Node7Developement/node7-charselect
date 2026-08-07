@@ -9,6 +9,9 @@ local loadingCharacter = false
 local nativeLoadingActive = false
 local cam = nil
 local fixedCam = nil
+local nuiReady = false
+local activeSelectionRequest = nil
+local selectionTransitionStarted = false
 
 -- Fixed hidden selector stage and cinematic camera.
 local PLAYER_STAGE = vector4(1542.79, 1187.29, 283.18, -91.68)
@@ -26,6 +29,11 @@ local function notify(message, notifyType)
             duration = 5000,
         })
     end
+end
+
+local function setNuiFocusSafe(enabled)
+    pcall(function() SetNuiFocusKeepInput(false) end)
+    pcall(function() SetNuiFocus(enabled == true, enabled == true) end)
 end
 
 local function decodePosition(position)
@@ -170,87 +178,152 @@ local function openCharMenu(enabled, session)
     if not enabled then
         menuOpen = false
         isChoosing = false
-        SetNuiFocus(false, false)
+        setNuiFocusSafe(false)
         SendNUIMessage({ action = 'ui', toggle = false })
         skyCam(false)
         return
     end
 
+    local readyDeadline = GetGameTimer() + 5000
+    while not nuiReady and GetGameTimer() < readyDeadline do
+        Wait(50)
+        if session and session ~= selectionSession then return end
+    end
+
     Node7Core.Functions.TriggerCallback('node7-charselect:server:GetNumberOfCharacters', function(result)
         if session and session ~= selectionSession then return end
 
+        SendNUIMessage({ action = 'hardReset' })
         menuOpen = true
         isChoosing = true
-        SetNuiFocus(true, true)
         SendNUIMessage({
             action = 'ui',
             toggle = true,
             nChar = tonumber(result) or Config.DefaultNumberOfCharacters,
         })
         Wait(100)
+        setNuiFocusSafe(true)
         skyCam(true)
     end)
 end
 
+local function beginSelectionScene(session)
+    if session ~= selectionSession or selectionTransitionStarted then return end
+    selectionTransitionStarted = true
+
+    -- Never fade, freeze, or grant focus until the restarted NUI has confirmed
+    -- that its handlers are alive. This prevents a blank or grey selector.
+    while not nuiReady do
+        if session ~= selectionSession then return end
+        Wait(50)
+    end
+
+    DisplayRadar(false)
+    DoScreenFadeOut(250)
+    Wait(450)
+
+    if session ~= selectionSession then return end
+
+    RequestImap(-1699673416)
+    RequestImap(1679934574)
+    RequestImap(183712523)
+    GetInteriorAtCoords(PLAYER_STAGE.x, PLAYER_STAGE.y, PLAYER_STAGE.z)
+
+    hidePlayerAtOriginalStage()
+    Wait(900)
+
+    if session ~= selectionSession then return end
+
+    ShutdownLoadingScreen()
+    ShutdownLoadingScreenNui()
+    nativeLoadingActive = false
+
+    if Config.UseSelectionWeather and GetResourceState(Config.SelectionWeatherResource) == 'started' then
+        pcall(function()
+            exports[Config.SelectionWeatherResource]:setMyTime(Config.SelectionHour, 0, 0, 0, true)
+            exports[Config.SelectionWeatherResource]:setMyWeather(Config.SelectionWeather, 10.0, false, false)
+        end)
+    end
+
+    openCharMenu(true, session)
+end
+
+local function requestSelectionPreparation(session, requestId)
+    CreateThread(function()
+        local attempts = 0
+        while session == selectionSession
+            and activeSelectionRequest == requestId
+            and not selectionTransitionStarted do
+            attempts = attempts + 1
+            TriggerServerEvent('node7-charselect:server:requestSelection', requestId)
+
+            local retryAt = GetGameTimer() + 1750
+            while GetGameTimer() < retryAt do
+                if session ~= selectionSession
+                    or activeSelectionRequest ~= requestId
+                    or selectionTransitionStarted then
+                    return
+                end
+                Wait(50)
+            end
+
+            if attempts % 8 == 0 then
+                notify('Reconnecting the character selector...', 'info')
+            end
+        end
+    end)
+end
+
 local function enterSelection()
+    if loadingCharacter then return end
+
     selectionSession = selectionSession + 1
     local session = selectionSession
+    local requestId = ('%s:%s:%s'):format(GetPlayerServerId(PlayerId()), GetGameTimer(), session)
 
     selectingChar = true
-    isChoosing = true
+    isChoosing = false
     menuOpen = false
     loadingCharacter = false
     loadRequestPending = false
+    activeSelectionRequest = requestId
+    selectionTransitionStarted = false
 
     setNativeLoadingScreen(false)
     setLoadingOverlay(false)
     pcall(ClearFocus)
     skyCam(false)
-    SetNuiFocus(false, false)
+    setNuiFocusSafe(false)
+    SendNUIMessage({ action = 'hardReset' })
     SendNUIMessage({ action = 'selectionReset' })
 
-    -- Let the server save the real gameplay location before this client is moved
-    -- to the fixed selector stage. This also safely logs out external flows.
-    Node7Core.Functions.TriggerCallback('node7-charselect:server:prepareSelection', function()
-        if session ~= selectionSession then return end
-
-        DisplayRadar(false)
-        DoScreenFadeOut(10)
-        Wait(1000)
-
-        if session ~= selectionSession then return end
-
-        RequestImap(-1699673416)
-        RequestImap(1679934574)
-        RequestImap(183712523)
-        GetInteriorAtCoords(PLAYER_STAGE.x, PLAYER_STAGE.y, PLAYER_STAGE.z)
-
-        hidePlayerAtOriginalStage()
-        Wait(1500)
-
-        if session ~= selectionSession then return end
-
-        ShutdownLoadingScreen()
-        ShutdownLoadingScreenNui()
-        nativeLoadingActive = false
-
-        if Config.UseSelectionWeather and GetResourceState(Config.SelectionWeatherResource) == 'started' then
-            pcall(function()
-                exports[Config.SelectionWeatherResource]:setMyTime(Config.SelectionHour, 0, 0, 0, true)
-                exports[Config.SelectionWeatherResource]:setMyWeather(Config.SelectionWeather, 10.0, false, false)
-            end)
-        end
-
-        openCharMenu(true, session)
-    end)
+    requestSelectionPreparation(session, requestId)
 end
+
+RegisterNetEvent('node7-charselect:client:selectionPrepared', function(requestId)
+    requestId = tostring(requestId or '')
+    if requestId == '' or requestId ~= activeSelectionRequest then return end
+    beginSelectionScene(selectionSession)
+end)
+
+RegisterNetEvent('node7-charselect:client:forceSelectionAfterRestart', function()
+    if loadingCharacter then return end
+    if activeSelectionRequest or menuOpen or selectionTransitionStarted then return end
+    enterSelection()
+end)
 
 RegisterNetEvent('node7-charselect:client:chooseChar', enterSelection)
 
 RegisterNetEvent('node7-charselect:client:closeNUI', function()
     menuOpen = false
-    SetNuiFocus(false, false)
+    setNuiFocusSafe(false)
     isChoosing = false
+end)
+
+RegisterNUICallback('nuiReady', function(_, cb)
+    nuiReady = true
+    SendNUIMessage({ action = 'hardReset' })
+    cb({ ok = true })
 end)
 
 RegisterNUICallback('closeUI', function(_, cb)
@@ -278,6 +351,8 @@ RegisterNUICallback('selectCharacter', function(data, cb)
 
     loadRequestPending = true
     selectingChar = false
+    activeSelectionRequest = nil
+    selectionTransitionStarted = false
     TriggerServerEvent('node7-charselect:server:loadUserData', character.citizenid)
     cb({ ok = true })
 end)
@@ -340,7 +415,7 @@ RegisterNetEvent('node7-charselect:client:createResult', function(success, messa
     if not success then
         notify(message or 'Character could not be created.', 'error')
         SendNUIMessage({ action = 'createResult', success = false, message = message })
-        SetNuiFocus(true, true)
+        setNuiFocusSafe(true)
     end
 end)
 
@@ -359,7 +434,7 @@ RegisterNetEvent('node7-charselect:client:prepareCharacterLoad', function(token,
     selectingChar = false
 
     local position = decodePosition(rawPosition)
-    SetNuiFocus(false, false)
+    setNuiFocusSafe(false)
     setLoadingOverlay(true, isNew == true)
     setNativeLoadingScreen(true, 'YOU ARE WAKING UP', isNew and 'Beginning your story' or 'Returning to your last location')
     skyCam(false)
@@ -373,8 +448,10 @@ RegisterNetEvent('node7-charselect:client:spawnCharacter', function(playerData, 
     menuOpen = false
     selectingChar = false
     isChoosing = false
+    activeSelectionRequest = nil
+    selectionTransitionStarted = false
 
-    SetNuiFocus(false, false)
+    setNuiFocusSafe(false)
     skyCam(false)
 
     local position = decodePosition(playerData and playerData.position)
@@ -430,13 +507,13 @@ RegisterNetEvent('node7-charselect:client:serverError', function(message)
 
     SendNUIMessage({ action = 'characterLoadFailed', message = message })
     SendNUIMessage({ action = 'createResult', success = false, message = message })
-    SetNuiFocus(true, true)
+    setNuiFocusSafe(true)
 end)
 
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
     stopCharacterLoading(true)
-    SetNuiFocus(false, false)
+    setNuiFocusSafe(false)
     skyCam(false)
     local ped = PlayerPedId()
     SetEntityCollision(ped, true, true)
@@ -450,14 +527,9 @@ CreateThread(function()
     repeat Wait(250) until NetworkIsPlayerActive(PlayerId())
     Wait(500)
 
-    local hasLoadedCharacter = false
-    pcall(function()
-        local playerData = Node7Core.Functions.GetPlayerData()
-        hasLoadedCharacter = type(playerData) == 'table' and playerData.citizenid ~= nil
-    end)
-    if not hasLoadedCharacter then
-        enterSelection()
-    end
+    -- A resource restart must always return an active character to a clean selector
+    -- session. The server saves the exact gameplay position before logging out.
+    enterSelection()
 
     while true do
         if isChoosing then

@@ -1,9 +1,9 @@
 $engine: 3
 $onesync: on
 name: NODE7 Character Select
-version: 5.3.0
+version: 5.4.0
 author: NODE7 Development Studios
-description: NODE7 keyboard-navigable nested side-panel character selection with paged creation and no preview ped.
+description: NODE7 restart-safe nested side-panel character selection with keyboard navigation and no preview ped.
 tasks:
   - action: ensure_dir
     path: ./resources/[node7]/node7-charselect

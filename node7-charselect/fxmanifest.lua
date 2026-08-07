@@ -6,8 +6,8 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 lua54 'yes'
 
 author 'NODE7 Development Studios'
-description 'NODE7 keyboard-navigable nested side character selection with paged creation and no preview ped.'
-version '5.3.0'
+description 'NODE7 restart-safe nested side character selection with keyboard navigation and no preview ped.'
+version '5.4.0'
 
 ui_page 'html/index.html'
 
@@ -26,8 +26,6 @@ files {
     'html/reset.css',
     'html/script.js',
     'html/profanity.js',
-    'html/AD-Rsail.otf',
-    'html/CHINESER.TTF',
     'html/assets/*.png'
 }
 

@@ -1,5 +1,15 @@
 # Versions
 
+## 5.4.0
+
+- Restarting `node7-charselect` now saves the current gameplay position, logs out the active character, and returns the player to character selection instead of leaving the session in gameplay.
+- Added a request/acknowledgement selector handshake with safe retries so the player cannot be stranded while the server side finishes restarting.
+- Added a matching request token so delayed or duplicate restart events cannot reopen an old selector session.
+- Added a complete NUI hard reset that clears loading flags, disabled controls, overlays, animations, focus state, and stale nested-page selection.
+- Added NUI readiness acknowledgement before focus is granted.
+- Added a server-side restart recovery broadcast for already-connected players.
+- Preserved the nested side-panel flow, keyboard controls, no-preview-ped design, exact gameplay-position saving, and recipe integration.
+
 ## 5.3.0
 
 - Rebuilt the selector into a true nested page stack instead of expanding every section beneath the roster.

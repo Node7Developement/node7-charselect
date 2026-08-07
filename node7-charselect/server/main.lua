@@ -2,6 +2,7 @@ local Node7Core = exports['node7-core']:GetCoreObject()
 local RESOURCE_NAME = GetCurrentResourceName()
 
 local pendingLoads = {}
+local selectionRequests = {}
 local SELECTOR_PLAYER_STAGE = { x = 1542.79, y = 1187.29, z = 283.18 }
 local SELECTOR_PREVIEW_STAGE = { x = 1544.10, y = 1187.65, z = 283.18 }
 
@@ -223,7 +224,7 @@ Node7Core.Functions.CreateCallback('node7-charselect:server:GetNumberOfCharacter
     cb(getCharacterLimit(source))
 end)
 
-Node7Core.Functions.CreateCallback('node7-charselect:server:prepareSelection', function(source, cb)
+local function prepareSelection(source)
     pendingLoads[source] = nil
     local player = Node7Core.Functions.GetPlayer(source)
     if player then
@@ -231,7 +232,33 @@ Node7Core.Functions.CreateCallback('node7-charselect:server:prepareSelection', f
         Node7Core.Player.Logout(source)
         Wait(250)
     end
+end
+
+Node7Core.Functions.CreateCallback('node7-charselect:server:prepareSelection', function(source, cb)
+    prepareSelection(source)
     cb(true)
+end)
+
+RegisterNetEvent('node7-charselect:server:requestSelection', function(requestId)
+    local source = source
+    requestId = trim(requestId)
+    if requestId == '' then return end
+
+    local existing = selectionRequests[source]
+    if existing and existing.id == requestId then
+        if existing.ready then
+            TriggerClientEvent('node7-charselect:client:selectionPrepared', source, requestId)
+        end
+        return
+    end
+
+    selectionRequests[source] = { id = requestId, ready = false }
+    prepareSelection(source)
+
+    local current = selectionRequests[source]
+    if not current or current.id ~= requestId or not GetPlayerName(source) then return end
+    current.ready = true
+    TriggerClientEvent('node7-charselect:client:selectionPrepared', source, requestId)
 end)
 
 Node7Core.Functions.CreateCallback('node7-charselect:server:setupCharacters', function(source, cb)
@@ -506,6 +533,17 @@ end, false)
 
 AddEventHandler('playerDropped', function()
     pendingLoads[source] = nil
+    selectionRequests[source] = nil
 end)
 
-print(('[%s] started v5.1.0'):format(RESOURCE_NAME))
+AddEventHandler('onResourceStart', function(resource)
+    if resource ~= RESOURCE_NAME then return end
+    CreateThread(function()
+        Wait(1000)
+        for _, playerId in ipairs(GetPlayers()) do
+            TriggerClientEvent('node7-charselect:client:forceSelectionAfterRestart', tonumber(playerId))
+        end
+    end)
+end)
+
+print(('[%s] started v5.4.0'):format(RESOURCE_NAME))

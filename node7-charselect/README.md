@@ -1,6 +1,6 @@
 # node7-charselect
 
-NODE7 RedM character selection with a true nested side-panel flow, keyboard navigation, and no preview ped.
+NODE7 RedM character selection with a restart-safe nested side-panel flow, keyboard navigation, and no preview ped.
 
 ## Requirements
 
@@ -32,3 +32,6 @@ ensure node7-charselect
 - New characters receive the configured default NODE7 appearance and spawn at `Config.DefaultSpawn`.
 - The native RedM loading screen and NODE7 fallback overlay remain active during the final spawn handoff.
 - Logout saves the gameplay position before returning to character selection.
+- Restarting `node7-charselect` safely saves the active character position, logs that character out, and returns the player to a fresh selector session.
+- The NUI is hard-reset on every selector session so stale loading locks, disabled buttons, overlays, and focus cannot survive a resource restart.
+- The client retries the server selector handshake until it receives a matching acknowledgement, preventing a grey or unclickable half-open interface.

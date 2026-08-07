@@ -14,6 +14,19 @@ let createTargetIndex = 0;
 const resourceName = typeof GetParentResourceName === 'function' ? GetParentResourceName() : 'node7-charselect';
 const nui = (route, payload) => $.post(`https://${resourceName}/${route}`, JSON.stringify(payload || {}));
 const createStepTitles = ['Name', 'Background', 'Gender', 'Review'];
+let nuiReadyRetry = null;
+
+function announceNuiReady() {
+    nui('nuiReady')
+        .done(() => {
+            if (nuiReadyRetry) clearTimeout(nuiReadyRetry);
+            nuiReadyRetry = null;
+        })
+        .fail(() => {
+            if (nuiReadyRetry) clearTimeout(nuiReadyRetry);
+            nuiReadyRetry = setTimeout(announceNuiReady, 400);
+        });
+}
 
 function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>'"/]/g, (character) => ({
@@ -111,6 +124,23 @@ function setView(view) {
     }
 }
 
+function unlockInterface() {
+    $('.flow-action, .gender-choice, .character-slot, #create-next, #create-previous').prop('disabled', false);
+    $('#create-next span:first').text(currentCreateStep === 3 ? 'Create Character' : 'Continue');
+    $('#create-next .action-arrow').text(currentCreateStep === 3 ? '✓' : '›');
+}
+
+function hardResetInterface() {
+    characterLoading = false;
+    loadRequestPending = false;
+    createSubmitting = false;
+    $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
+    $('.container').removeClass('interface-locked');
+    $('#character-feedback, #create-feedback, #delete-feedback').text('');
+    unlockInterface();
+    resetSelection();
+}
+
 function resetSelection() {
     selectedSlot = null;
     createSubmitting = false;
@@ -120,6 +150,7 @@ function resetSelection() {
     currentCreateStep = 0;
     createTargetIndex = 0;
     $('#character-feedback, #create-feedback, #delete-feedback').text('');
+    unlockInterface();
     resetCreateForm();
     setView('roster');
 }
@@ -175,6 +206,7 @@ function showExistingCharacter(character) {
         detailCard('Bank', money(character.money?.bank))
     );
     $('#character-feedback').text('');
+    $('#character-actions .flow-action').prop('disabled', false);
     setView('character');
 }
 
@@ -446,29 +478,28 @@ $(document).ready(() => {
     window.addEventListener('message', (event) => {
         const data = event.data || {};
 
+        if (data.action === 'hardReset') {
+            hardResetInterface();
+        }
+
         if (data.action === 'ui') {
             characterLimit = Number(data.nChar) || 5;
             if (data.toggle) {
-                characterLoading = false;
-                loadRequestPending = false;
-                createSubmitting = false;
+                hardResetInterface();
                 charactersBySlot = {};
-                $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
-                $('.container').show().attr('aria-hidden', 'false');
-                $('#selector-content').hide();
-                $('#selector-loading').show();
-                resetSelection();
+                $('.container').stop(true, true).show().attr('aria-hidden', 'false');
+                $('#selector-content').stop(true, true).hide();
+                $('#selector-loading').stop(true, true).show();
                 renderSlots();
                 nui('setupCharacters');
             } else {
-                $('.container').hide().attr('aria-hidden', 'true');
-                resetSelection();
+                $('.container').stop(true, true).hide().attr('aria-hidden', 'true');
+                hardResetInterface();
             }
         }
 
         if (data.action === 'selectionReset') {
-            resetSelection();
-            $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
+            hardResetInterface();
         }
 
         if (data.action === 'setupCharacters') {
@@ -501,6 +532,7 @@ $(document).ready(() => {
             characterLoading = false;
             loadRequestPending = false;
             $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
+            unlockInterface();
             visibleActions('#character-actions').prop('disabled', false);
             if (selectedSlot && charactersBySlot[selectedSlot]) showExistingCharacter(charactersBySlot[selectedSlot]);
             $('#character-feedback').text(data.message || 'Character could not be loaded.');
@@ -567,6 +599,8 @@ $(document).ready(() => {
         else if (currentView === 'delete') handleActionKeys(event, '#delete-actions', 'cancel-delete');
         else if (currentView === 'create') handleCreateKeys(event);
     });
+
+    announceNuiReady();
 
     $('#disconnect').on('click', () => {
         nui('closeUI');
