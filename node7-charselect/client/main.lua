@@ -1,10 +1,8 @@
 local Node7Core = exports['node7-core']:GetCoreObject()
 
-local charPed = nil
 local selectingChar = true
 local isChoosing = false
 local menuOpen = false
-local previewToken = 0
 local selectionSession = 0
 local loadRequestPending = false
 local loadingCharacter = false
@@ -12,9 +10,8 @@ local nativeLoadingActive = false
 local cam = nil
 local fixedCam = nil
 
--- Locked to the exact supplied RSG selector placement.
+-- Fixed hidden selector stage and cinematic camera.
 local PLAYER_STAGE = vector4(1542.79, 1187.29, 283.18, -91.68)
-local PREVIEW_STAGE = vector4(1544.10, 1187.65, 283.18, -91.68)
 local CAMERA_START = vector3(1548.80, 1187.90, 284.29)
 local CAMERA_END = vector3(1545.80, 1187.90, 284.29)
 local CAMERA_START_ROT = vector3(-20.0, 0.0, 83.0)
@@ -90,14 +87,6 @@ local function stopCharacterLoading(hideUi)
     end
 end
 
-local function deletePreviewPed()
-    if charPed and DoesEntityExist(charPed) then
-        SetEntityAsMissionEntity(charPed, true, true)
-        DeleteEntity(charPed)
-    end
-    charPed = nil
-end
-
 local function hidePlayerAtOriginalStage()
     local ped = PlayerPedId()
     RequestCollisionAtCoord(PLAYER_STAGE.x, PLAYER_STAGE.y, PLAYER_STAGE.z)
@@ -149,72 +138,10 @@ local function waitForSpawnCollision(ped, position)
     return loaded
 end
 
-local function preparePreviewPed(ped)
-    RequestCollisionAtCoord(PREVIEW_STAGE.x, PREVIEW_STAGE.y, PREVIEW_STAGE.z)
-    SetEntityCoords(ped, PREVIEW_STAGE.x, PREVIEW_STAGE.y, PREVIEW_STAGE.z, false, false, false, false)
-    SetEntityHeading(ped, PREVIEW_STAGE.w)
-    SetEntityAlpha(ped, 255, false)
-    SetEntityVisible(ped, true, false)
-    SetEntityCollision(ped, true, true)
-    FreezeEntityPosition(ped, true)
-    SetEntityInvincible(ped, true)
-    SetBlockingOfNonTemporaryEvents(ped, true)
-    pcall(function() NetworkSetEntityInvisibleToNetwork(ped, true) end)
-
-    RequestCollisionAtCoord(PREVIEW_STAGE.x, PREVIEW_STAGE.y, PREVIEW_STAGE.z)
-    Wait(500)
-    SetEntityCoords(ped, PREVIEW_STAGE.x, PREVIEW_STAGE.y, PREVIEW_STAGE.z, false, false, false, false)
-    SetEntityHeading(ped, PREVIEW_STAGE.w)
-
-    ClearPedTasksImmediately(ped)
-    local scenario = IsPedMale(ped) and 'MP_LOBBY_STANDING_C' or 'MP_LOBBY_STANDING_G'
-    TaskStartScenarioInPlace(ped, joaat(scenario), -1, true)
-    FreezeEntityPosition(ped, false)
-end
-
-local function cloneAppliedPlayerForPreview()
-    local sourcePed = PlayerPedId()
-    local clone = ClonePed(sourcePed, PREVIEW_STAGE.w, false, false)
-    if not clone or clone == 0 or not DoesEntityExist(clone) then
-        print('[node7-charselect] ClonePed failed while creating the character preview.')
-        return false
-    end
-
-    charPed = clone
-    SetEntityAsMissionEntity(charPed, true, true)
-    preparePreviewPed(charPed)
-    hidePlayerAtOriginalStage()
-    return true
-end
-
-local function applyAppearanceAndClone(skin, clothes)
-    local selectedSkin = type(skin) == 'table' and skin or Config.DefaultAppearance.male
-    local selectedClothes = type(clothes) == 'table' and clothes or {}
-
-    local ok, err = pcall(function()
-        exports['node7-appearance']:ApplySkin(selectedSkin, selectedClothes)
-    end)
-    if not ok then
-        print(('[node7-charselect] node7-appearance ApplySkin failed: %s'):format(tostring(err)))
-        return false
-    end
-
-    Wait(250)
-    hidePlayerAtOriginalStage()
-    return cloneAppliedPlayerForPreview()
-end
-
-local function showEmptyPreview()
-    deletePreviewPed()
-    local defaults = math.random(1, 2) == 1 and Config.DefaultAppearance.male or Config.DefaultAppearance.female
-    applyAppearanceAndClone(defaults, {})
-end
-
 local function skyCam(enabled)
     if enabled then
         DoScreenFadeIn(1000)
-        SetTimecycleModifier('hud_def_blur')
-        SetTimecycleModifierStrength(1.0)
+        SetTimecycleModifier('default')
 
         cam = CreateCam('DEFAULT_SCRIPTED_CAMERA')
         SetCamCoord(cam, CAMERA_START.x, CAMERA_START.y, CAMERA_START.z)
@@ -274,12 +201,10 @@ local function enterSelection()
     menuOpen = false
     loadingCharacter = false
     loadRequestPending = false
-    previewToken = previewToken + 1
 
     setNativeLoadingScreen(false)
     setLoadingOverlay(false)
     pcall(ClearFocus)
-    deletePreviewPed()
     skyCam(false)
     SetNuiFocus(false, false)
     SendNUIMessage({ action = 'selectionReset' })
@@ -328,48 +253,12 @@ RegisterNetEvent('node7-charselect:client:closeNUI', function()
     isChoosing = false
 end)
 
-RegisterNUICallback('cDataPed', function(data, cb)
-    if loadingCharacter or loadRequestPending then
-        cb({ ok = false })
-        return
-    end
-
-    previewToken = previewToken + 1
-    local token = previewToken
-    local character = data and data.cData
-
-    deletePreviewPed()
-
-    if not character or not character.citizenid then
-        showEmptyPreview()
-        cb({ ok = true })
-        return
-    end
-
-    Node7Core.Functions.TriggerCallback('node7-charselect:server:getAppearance', function(appearance)
-        if token ~= previewToken or loadingCharacter then return end
-
-        local skin = type(appearance) == 'table' and appearance.skin or nil
-        local clothes = type(appearance) == 'table' and appearance.clothes or nil
-        if type(skin) ~= 'table' then
-            local gender = character.charinfo and tonumber(character.charinfo.gender) or 0
-            skin = gender == 1 and Config.DefaultAppearance.female or Config.DefaultAppearance.male
-            clothes = {}
-        end
-
-        applyAppearanceAndClone(skin, clothes)
-    end, character.citizenid)
-
-    cb({ ok = true })
-end)
-
 RegisterNUICallback('closeUI', function(_, cb)
     openCharMenu(false)
     cb({ ok = true })
 end)
 
 RegisterNUICallback('disconnectButton', function(_, cb)
-    deletePreviewPed()
     TriggerServerEvent('node7-charselect:server:disconnect')
     cb({ ok = true })
 end)
@@ -389,7 +278,6 @@ RegisterNUICallback('selectCharacter', function(data, cb)
 
     loadRequestPending = true
     selectingChar = false
-    previewToken = previewToken + 1
     TriggerServerEvent('node7-charselect:server:loadUserData', character.citizenid)
     cb({ ok = true })
 end)
@@ -398,11 +286,6 @@ RegisterNUICallback('setupCharacters', function(_, cb)
     Node7Core.Functions.TriggerCallback('node7-charselect:server:setupCharacters', function(result)
         SendNUIMessage({ action = 'setupCharacters', characters = result or {} })
     end)
-    cb({ ok = true })
-end)
-
-RegisterNUICallback('removeBlur', function(_, cb)
-    SetTimecycleModifier('default')
     cb({ ok = true })
 end)
 
@@ -464,10 +347,6 @@ end)
 RegisterNetEvent('node7-charselect:client:deleteResult', function(success, message)
     notify(message or (success and 'Character deleted.' or 'Character could not be deleted.'), success and 'success' or 'error')
     SendNUIMessage({ action = 'deleteResult', success = success, message = message })
-    if success then
-        previewToken = previewToken + 1
-        showEmptyPreview()
-    end
 end)
 
 RegisterNetEvent('node7-charselect:client:prepareCharacterLoad', function(token, rawPosition, isNew)
@@ -478,13 +357,11 @@ RegisterNetEvent('node7-charselect:client:prepareCharacterLoad', function(token,
     menuOpen = false
     isChoosing = false
     selectingChar = false
-    previewToken = previewToken + 1
 
     local position = decodePosition(rawPosition)
     SetNuiFocus(false, false)
     setLoadingOverlay(true, isNew == true)
     setNativeLoadingScreen(true, 'YOU ARE WAKING UP', isNew and 'Beginning your story' or 'Returning to your last location')
-    deletePreviewPed()
     skyCam(false)
     prepareHiddenPlayerForSpawn(position)
 
@@ -496,9 +373,7 @@ RegisterNetEvent('node7-charselect:client:spawnCharacter', function(playerData, 
     menuOpen = false
     selectingChar = false
     isChoosing = false
-    previewToken = previewToken + 1
 
-    deletePreviewPed()
     SetNuiFocus(false, false)
     skyCam(false)
 
@@ -560,7 +435,6 @@ end)
 
 AddEventHandler('onResourceStop', function(resource)
     if resource ~= GetCurrentResourceName() then return end
-    deletePreviewPed()
     stopCharacterLoading(true)
     SetNuiFocus(false, false)
     skyCam(false)

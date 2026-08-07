@@ -7,109 +7,215 @@
     <link href="reset.css" rel="stylesheet">
     <link href="style.css" rel="stylesheet">
     <script src="nui://game/ui/jquery.js" type="text/javascript"></script>
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
     <title>NODE7 Character Select</title>
 </head>
 <body>
-    <div class="container">
-        <div class="main-screen">
-            <div class="welcomescreen">
-                <div class="loading-rondje">
-                    <div class="lds-ring"><div></div><div></div><div></div><div></div></div>
-                    <p id="loading-text">Loading Characters</p>
+    <main class="container" aria-hidden="true">
+        <section class="selector-shell" aria-label="Character selection">
+            <header class="selector-header">
+                <div>
+                    <p class="selector-kicker">NODE7 COUNTY</p>
+                    <h1>Choose Your Story</h1>
                 </div>
+                <button type="button" class="text-button" id="disconnect">Disconnect</button>
+            </header>
+
+            <div class="selector-loading" id="selector-loading" aria-live="polite">
+                <span class="spinner" aria-hidden="true"></span>
+                <p id="loading-text">Retrieving characters...</p>
             </div>
 
-            <div class="characters-list"></div>
+            <div class="selector-content" id="selector-content">
+                <section class="nested-view active" id="roster-view" data-view="roster" aria-label="Character slots">
+                    <div class="view-heading">
+                        <div>
+                            <p class="view-eyebrow">Character Roster</p>
+                            <h2>Select a Slot</h2>
+                        </div>
+                        <span class="slot-count" id="slot-count">0 / 0</span>
+                    </div>
 
-            <div class="character-info">
-                <div class="char-info-titel"><span id="char-info-titel">Character Information</span></div>
-                <div class="character-info-valid">
-                    <span id="no-char">Select a character slot to see all information about your character.</span>
-                </div>
+                    <div class="characters-list" id="characters-list"></div>
+
+                    <div class="key-hints" aria-hidden="true">
+                        <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+                        <span><kbd>Enter</kbd> Open</span>
+                    </div>
+                </section>
+
+                <section class="nested-view" id="character-view" data-view="character" aria-label="Selected character">
+                    <button type="button" class="nested-back" data-action="back-roster">‹ Character Roster</button>
+
+                    <div class="selected-banner">
+                        <p class="view-eyebrow" id="selected-slot-label">Selected Slot 01</p>
+                        <h2 id="selected-character-name">Character</h2>
+                        <p id="selected-character-summary">Review this character before entering the county.</p>
+                    </div>
+
+                    <div class="character-details" id="character-details"></div>
+
+                    <p class="action-feedback" id="character-feedback" aria-live="polite"></p>
+
+                    <div class="action-list" id="character-actions" aria-label="Character actions">
+                        <button type="button" class="flow-action primary" data-action="enter-county">
+                            <span>Enter County</span><span class="action-arrow">›</span>
+                        </button>
+                        <button type="button" class="flow-action danger" data-action="open-delete">
+                            <span>Delete Character</span><span class="action-arrow">›</span>
+                        </button>
+                        <button type="button" class="flow-action" data-action="back-roster">
+                            <span>Back to Roster</span><span class="action-arrow">‹</span>
+                        </button>
+                    </div>
+
+                    <div class="key-hints" aria-hidden="true">
+                        <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+                        <span><kbd>Enter</kbd> Confirm</span>
+                        <span><kbd>←</kbd> Back</span>
+                    </div>
+                </section>
+
+                <section class="nested-view" id="create-view" data-view="create" aria-label="Create character">
+                    <button type="button" class="nested-back" data-action="create-back">‹ Previous</button>
+
+                    <div class="create-heading">
+                        <div>
+                            <p class="view-eyebrow" id="create-slot-label">Empty Slot 01</p>
+                            <h2 id="create-step-title">Name</h2>
+                        </div>
+                        <span class="step-count" id="create-step-count">1 / 4</span>
+                    </div>
+
+                    <div class="step-track" aria-hidden="true">
+                        <span class="step-dot active"></span>
+                        <span class="step-dot"></span>
+                        <span class="step-dot"></span>
+                        <span class="step-dot"></span>
+                    </div>
+
+                    <form class="character-form" id="character-form" autocomplete="off" novalidate>
+                        <section class="create-step active" data-step="0">
+                            <p class="step-description">Give your character a name for county records.</p>
+                            <div class="form-field" data-field="firstname">
+                                <label for="firstname">First Name</label>
+                                <div class="field-control">
+                                    <input id="firstname" class="char-reg-input keyboard-target" type="text" maxlength="30" spellcheck="false" placeholder="First name">
+                                    <span class="field-check" aria-hidden="true">✓</span>
+                                </div>
+                                <span class="field-feedback">Enter 2–30 letters.</span>
+                            </div>
+                            <div class="form-field" data-field="lastname">
+                                <label for="lastname">Last Name</label>
+                                <div class="field-control">
+                                    <input id="lastname" class="char-reg-input keyboard-target" type="text" maxlength="30" spellcheck="false" placeholder="Last name">
+                                    <span class="field-check" aria-hidden="true">✓</span>
+                                </div>
+                                <span class="field-feedback">Enter 2–30 letters.</span>
+                            </div>
+                        </section>
+
+                        <section class="create-step" data-step="1">
+                            <p class="step-description">Set the birthdate and nationality shown on the character record.</p>
+                            <div class="form-field" data-field="birthdate">
+                                <label for="birthdate">Birthdate</label>
+                                <div class="field-control">
+                                    <input id="birthdate" class="char-reg-input keyboard-target" type="text" maxlength="10" inputmode="numeric" spellcheck="false" placeholder="YYYY-MM-DD">
+                                    <span class="field-check" aria-hidden="true">✓</span>
+                                </div>
+                                <span class="field-feedback">Use a real date: YYYY-MM-DD.</span>
+                            </div>
+                            <div class="form-field" data-field="nationality">
+                                <label for="nationality">Nationality</label>
+                                <div class="field-control">
+                                    <input id="nationality" class="char-reg-input keyboard-target" type="text" maxlength="40" spellcheck="false" placeholder="American">
+                                    <span class="field-check" aria-hidden="true">✓</span>
+                                </div>
+                                <span class="field-feedback">Enter a nationality.</span>
+                            </div>
+                        </section>
+
+                        <section class="create-step" data-step="2">
+                            <p class="step-description">Choose the base character model used when the story begins.</p>
+                            <div class="gender-choice-list" role="group" aria-label="Gender">
+                                <button type="button" class="gender-choice keyboard-target selected" data-gender="0">
+                                    <span class="choice-mark">01</span>
+                                    <span><strong>Male</strong><small>Male base character</small></span>
+                                    <span class="choice-arrow">›</span>
+                                </button>
+                                <button type="button" class="gender-choice keyboard-target" data-gender="1">
+                                    <span class="choice-mark">02</span>
+                                    <span><strong>Female</strong><small>Female base character</small></span>
+                                    <span class="choice-arrow">›</span>
+                                </button>
+                            </div>
+                        </section>
+
+                        <section class="create-step" data-step="3">
+                            <p class="step-description">Review the complete record before creating this character.</p>
+                            <div class="creation-review" id="creation-review"></div>
+                            <p class="action-feedback" id="create-feedback" aria-live="polite"></p>
+                        </section>
+                    </form>
+
+                    <div class="create-actions">
+                        <button type="button" class="flow-action" id="create-previous" data-action="create-back">
+                            <span>Previous</span><span class="action-arrow">‹</span>
+                        </button>
+                        <button type="button" class="flow-action primary" id="create-next" data-action="create-next">
+                            <span>Continue</span><span class="action-arrow">›</span>
+                        </button>
+                    </div>
+
+                    <div class="key-hints" aria-hidden="true">
+                        <span><kbd>↑</kbd><kbd>↓</kbd> Move</span>
+                        <span><kbd>Enter</kbd> Continue</span>
+                        <span><kbd>←</kbd> Previous</span>
+                    </div>
+                </section>
+
+                <section class="nested-view" id="delete-view" data-view="delete" aria-label="Delete character">
+                    <button type="button" class="nested-back" data-action="cancel-delete">‹ Character Details</button>
+
+                    <div class="delete-warning">
+                        <p class="view-eyebrow">Permanent Action</p>
+                        <h2>Delete Character?</h2>
+                        <p id="delete-character-name">This character and all saved data will be permanently removed.</p>
+                    </div>
+
+                    <div class="delete-seal" aria-hidden="true">!</div>
+                    <p class="delete-copy">This cannot be undone. Confirm only when you are certain this character should be removed from the county.</p>
+                    <p class="action-feedback" id="delete-feedback" aria-live="polite"></p>
+
+                    <div class="action-list" id="delete-actions">
+                        <button type="button" class="flow-action danger" data-action="confirm-delete">
+                            <span>Confirm Delete</span><span class="action-arrow">×</span>
+                        </button>
+                        <button type="button" class="flow-action primary" data-action="cancel-delete">
+                            <span>Keep Character</span><span class="action-arrow">‹</span>
+                        </button>
+                    </div>
+
+                    <div class="key-hints" aria-hidden="true">
+                        <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+                        <span><kbd>Enter</kbd> Confirm</span>
+                        <span><kbd>←</kbd> Cancel</span>
+                    </div>
+                </section>
             </div>
+        </section>
 
-            <div class="character-register">
-                <div class="characters-register-block-header">
-                    <p>Create New Character</p>
-                    <i class="material-icons-one" id="close-reg">close</i>
-                </div>
-
-                <div class="char-register-inputs">
-                    <div class="form-field" data-field="firstname">
-                        <label for="firstname">First Name</label>
-                        <div class="field-control">
-                            <input class="char-reg-input" id="firstname" type="text" maxlength="30" autocomplete="off" spellcheck="false" placeholder="First name">
-                            <span class="field-check">✓</span>
-                        </div>
-                        <span class="field-feedback">Enter 2–30 letters.</span>
-                    </div>
-
-                    <div class="form-field" data-field="lastname">
-                        <label for="lastname">Last Name</label>
-                        <div class="field-control">
-                            <input class="char-reg-input" id="lastname" type="text" maxlength="30" autocomplete="off" spellcheck="false" placeholder="Last name">
-                            <span class="field-check">✓</span>
-                        </div>
-                        <span class="field-feedback">Enter 2–30 letters.</span>
-                    </div>
-
-                    <div class="form-field" data-field="birthdate">
-                        <label for="birthdate">Birthdate</label>
-                        <div class="field-control">
-                            <input class="char-reg-input" id="birthdate" type="text" maxlength="10" autocomplete="off" spellcheck="false" inputmode="numeric" placeholder="YYYY-MM-DD">
-                            <span class="field-check">✓</span>
-                        </div>
-                        <span class="field-feedback">Use a real date: YYYY-MM-DD.</span>
-                    </div>
-
-                    <div class="form-field" data-field="nationality">
-                        <label for="nationality">Nationality</label>
-                        <div class="field-control">
-                            <input class="char-reg-input" id="nationality" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="American">
-                            <span class="field-check">✓</span>
-                        </div>
-                        <span class="field-feedback">Enter a nationality.</span>
-                    </div>
-
-                    <div class="form-field gender-field" data-field="gender">
-                        <label>Gender</label>
-                        <div class="gender-buttons" role="group" aria-label="Gender">
-                            <button type="button" class="gender-button selected" data-gender="0">Male</button>
-                            <button type="button" class="gender-button" data-gender="1">Female</button>
-                            <span class="field-check visible">✓</span>
-                        </div>
-                        <span class="field-feedback valid">Select Male or Female.</span>
-                    </div>
-
-                    <div class="form-submit-feedback" aria-live="polite"></div>
-                </div>
-
-                <div class="character-reg-btn disabled" id="create"><p id="create-text">Confirm</p></div>
-            </div>
-
-            <div class="character-delete">
-                <div class="characters-delete-block-header">
-                    <p>Delete Character</p>
-                </div>
-                <p>Are You Sure You Want To Delete Your Character?</p>
-                <div class="character-acceptdel-btn" id="accept-delete"><p id="accept-text">Confirm</p></div>
-                <div class="character-canceldel-btn" id="cancel-delete"><p id="cancel-text">Return</p></div>
-            </div>
-
-            <div class="character-loading-overlay" aria-live="polite" aria-hidden="true">
-                <div class="character-loading-panel">
-                    <div class="native-wheel-fallback"><span></span><span></span><span></span><span></span></div>
-                    <p class="character-loading-kicker">NODE7</p>
-                    <h1 id="character-loading-title">YOU ARE WAKING UP</h1>
-                    <p id="character-loading-message">Returning to your last location...</p>
-                    <div class="character-loading-track"><span></span></div>
-                </div>
+        <div class="character-loading-overlay" aria-live="polite" aria-hidden="true">
+            <div class="character-loading-panel">
+                <div class="native-wheel-fallback"><span></span><span></span><span></span><span></span></div>
+                <p class="character-loading-kicker">NODE7</p>
+                <h1 id="character-loading-title">YOU ARE WAKING UP</h1>
+                <p id="character-loading-message">Returning to your last location...</p>
+                <div class="character-loading-track"><span></span></div>
             </div>
         </div>
-    </div>
+    </main>
+
+    <script type="text/javascript" src="profanity.js"></script>
+    <script type="text/javascript" src="script.js"></script>
 </body>
-<script type="text/javascript" src="profanity.js"></script>
-<script type="text/javascript" src="script.js"></script>
 </html>

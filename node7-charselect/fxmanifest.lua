@@ -6,8 +6,8 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 lua54 'yes'
 
 author 'NODE7 Development Studios'
-description 'NODE7 character selection with preserved RSG preview placement, reliable last-location spawning, and native loading transitions.'
-version '5.1.0'
+description 'NODE7 keyboard-navigable nested side character selection with paged creation and no preview ped.'
+version '5.3.0'
 
 ui_page 'html/index.html'
 

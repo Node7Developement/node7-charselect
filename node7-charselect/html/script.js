@@ -1,27 +1,28 @@
-var selectedChar = null;
-var WelcomePercentage = "30vh";
-var qbMultiCharacters = {};
-var Loaded = false;
-var NChar = null;
-var selectedGender = 0;
-var createSubmitting = false;
-var characterLoading = false;
-var loadRequestPending = false;
+let selectedSlot = null;
+let characterLimit = 0;
+let charactersBySlot = {};
+let selectedGender = 0;
+let createSubmitting = false;
+let characterLoading = false;
+let loadRequestPending = false;
+let currentView = 'roster';
+let currentCreateStep = 0;
+let rosterIndex = 0;
+let actionIndex = 0;
+let createTargetIndex = 0;
 
 const resourceName = typeof GetParentResourceName === 'function' ? GetParentResourceName() : 'node7-charselect';
 const nui = (route, payload) => $.post(`https://${resourceName}/${route}`, JSON.stringify(payload || {}));
+const createStepTitles = ['Name', 'Background', 'Gender', 'Review'];
 
 function escapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>'"/]/g, function (character) {
-        return ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            "'": '&#39;',
-            '"': '&quot;',
-            '/': '&#x2F;'
-        })[character];
-    });
+    return String(value == null ? '' : value).replace(/[&<>'"/]/g, (character) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;', '/': '&#x2F;'
+    })[character]);
+}
+
+function money(value) {
+    return `$ ${Number(value || 0).toFixed(2)}`;
 }
 
 function validName(value) {
@@ -30,17 +31,14 @@ function validName(value) {
 
 function validBirthdate(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-    const parts = value.split('-').map(Number);
-    const year = parts[0];
-    const month = parts[1];
-    const day = parts[2];
+    const [year, month, day] = value.split('-').map(Number);
     if (year < 1800 || year > 1911 || month < 1 || month > 12 || day < 1 || day > 31) return false;
     const parsed = new Date(Date.UTC(year, month - 1, day));
     return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
 function fieldValue(field) {
-    return $(`#${field}`).val().trim();
+    return String($(`#${field}`).val() || '').trim();
 }
 
 function validateField(field, showInvalid) {
@@ -66,98 +64,423 @@ function validateField(field, showInvalid) {
     return valid;
 }
 
-function validateCreateForm(showInvalid) {
-    const valid = ['firstname', 'lastname', 'birthdate', 'nationality']
-        .map(field => validateField(field, showInvalid))
-        .every(Boolean);
+function validateCreateStep(step, showInvalid) {
+    if (step === 0) {
+        return ['firstname', 'lastname'].map((field) => validateField(field, showInvalid)).every(Boolean);
+    }
+    if (step === 1) {
+        return ['birthdate', 'nationality'].map((field) => validateField(field, showInvalid)).every(Boolean);
+    }
+    return true;
+}
 
-    $('#create').toggleClass('disabled', !valid || createSubmitting);
-    return valid;
+function validateCreateForm(showInvalid) {
+    return [0, 1].map((step) => validateCreateStep(step, showInvalid)).every(Boolean);
 }
 
 function resetCreateForm() {
-    createSubmitting = false;
     selectedGender = 0;
+    createSubmitting = false;
+    currentCreateStep = 0;
+    createTargetIndex = 0;
     $('#firstname, #lastname, #birthdate').val('');
     $('#nationality').val('American');
-    $('.gender-button').removeClass('selected');
-    $('.gender-button[data-gender="0"]').addClass('selected');
-    $('.form-submit-feedback').text('');
+    $('.gender-choice').removeClass('selected nav-selected');
+    $('.gender-choice[data-gender="0"]').addClass('selected');
     $('.form-field').removeClass('valid invalid');
-    $('#create').removeClass('submitting').addClass('disabled');
+    $('#create-feedback').text('');
     validateCreateForm(false);
 }
 
-function showCreateResult(message) {
+function setView(view) {
+    currentView = view;
+    actionIndex = 0;
+    createTargetIndex = 0;
+    $('.nested-view').removeClass('active');
+    $(`#${view}-view`).addClass('active');
+    $('.nav-selected').removeClass('nav-selected');
+
+    if (view === 'roster') {
+        applyRosterSelection(false);
+    } else if (view === 'character') {
+        applyActionSelection('#character-actions', 0, false);
+    } else if (view === 'delete') {
+        applyActionSelection('#delete-actions', 0, false);
+    } else if (view === 'create') {
+        renderCreateStep(false);
+    }
+}
+
+function resetSelection() {
+    selectedSlot = null;
     createSubmitting = false;
-    $('#create').removeClass('submitting');
-    $('.form-submit-feedback').text(message || 'Character could not be created.');
-    validateCreateForm(false);
+    loadRequestPending = false;
+    rosterIndex = 0;
+    actionIndex = 0;
+    currentCreateStep = 0;
+    createTargetIndex = 0;
+    $('#character-feedback, #create-feedback, #delete-feedback').text('');
+    resetCreateForm();
+    setView('roster');
 }
 
-$(document).ready(function () {
-    window.addEventListener('message', function (event) {
+function renderSlots() {
+    const list = $('#characters-list');
+    let occupied = 0;
+    list.empty();
+    list.css('--slot-total', Math.max(1, characterLimit));
+
+    for (let slot = 1; slot <= characterLimit; slot += 1) {
+        const character = charactersBySlot[slot];
+        if (character) occupied += 1;
+        const name = character
+            ? `${character.charinfo?.firstname || ''} ${character.charinfo?.lastname || ''}`.trim()
+            : 'Empty Slot';
+        const meta = character
+            ? `${character.job?.label || 'Civilian'} · ${character.citizenid || ''}`
+            : 'Begin a new story';
+
+        list.append(`
+            <button type="button" class="character-slot" data-slot="${slot}">
+                <span class="slot-number">${String(slot).padStart(2, '0')}</span>
+                <span class="slot-copy">
+                    <span class="slot-name">${escapeHtml(name)}</span>
+                    <span class="slot-meta">${escapeHtml(meta)}</span>
+                </span>
+                <span class="slot-state">›</span>
+            </button>
+        `);
+    }
+
+    $('#slot-count').text(`${occupied} / ${characterLimit}`);
+    rosterIndex = Math.min(rosterIndex, Math.max(0, characterLimit - 1));
+    applyRosterSelection(false);
+}
+
+function detailCard(label, value) {
+    return `<div class="detail-card"><span class="detail-label">${escapeHtml(label)}</span><strong class="detail-value">${escapeHtml(value)}</strong></div>`;
+}
+
+function showExistingCharacter(character) {
+    const fullName = `${character.charinfo?.firstname || ''} ${character.charinfo?.lastname || ''}`.trim() || 'Character';
+    $('#selected-slot-label').text(`Selected Slot ${String(selectedSlot).padStart(2, '0')}`);
+    $('#selected-character-name').text(fullName);
+    $('#selected-character-summary').text(`${character.citizenid || 'County record'} · ${character.job?.label || 'Civilian'}`);
+    $('#character-details').html(
+        detailCard('Birthdate', character.charinfo?.birthdate || 'Unknown') +
+        detailCard('Nationality', character.charinfo?.nationality || 'Unknown') +
+        detailCard('Job', character.job?.label || 'Civilian') +
+        detailCard('Gang', character.gang?.label || 'No Gang') +
+        detailCard('Cash', money(character.money?.cash)) +
+        detailCard('Bank', money(character.money?.bank))
+    );
+    $('#character-feedback').text('');
+    setView('character');
+}
+
+function showCreateCharacter(slot) {
+    resetCreateForm();
+    $('#create-slot-label').text(`Empty Slot ${String(slot).padStart(2, '0')}`);
+    setView('create');
+}
+
+function selectSlot(slot) {
+    if (characterLoading || loadRequestPending) return;
+    selectedSlot = Number(slot);
+    rosterIndex = Math.max(0, selectedSlot - 1);
+    const character = charactersBySlot[selectedSlot];
+    if (character) showExistingCharacter(character);
+    else showCreateCharacter(selectedSlot);
+}
+
+function applyRosterSelection(focusElement) {
+    const slots = $('.character-slot');
+    if (!slots.length) return;
+    rosterIndex = ((rosterIndex % slots.length) + slots.length) % slots.length;
+    slots.removeClass('nav-selected');
+    const selected = slots.eq(rosterIndex).addClass('nav-selected');
+    selectedSlot = Number(selected.data('slot')) || 1;
+    if (focusElement) selected.trigger('focus');
+}
+
+function visibleActions(containerSelector) {
+    return $(`${containerSelector} .flow-action:visible:not(:disabled)`);
+}
+
+function applyActionSelection(containerSelector, index, focusElement) {
+    const actions = visibleActions(containerSelector);
+    if (!actions.length) return;
+    actionIndex = ((index % actions.length) + actions.length) % actions.length;
+    actions.removeClass('nav-selected');
+    const selected = actions.eq(actionIndex).addClass('nav-selected');
+    if (focusElement) selected.trigger('focus');
+}
+
+function activeCreateTargets() {
+    if (currentCreateStep === 0 || currentCreateStep === 1) {
+        return $(`.create-step[data-step="${currentCreateStep}"] .char-reg-input`);
+    }
+    if (currentCreateStep === 2) {
+        return $('.create-step[data-step="2"] .gender-choice');
+    }
+    return $('.create-actions .flow-action:visible:not(:disabled)');
+}
+
+function applyCreateTarget(index, focusElement) {
+    const targets = activeCreateTargets();
+    if (!targets.length) return;
+    createTargetIndex = ((index % targets.length) + targets.length) % targets.length;
+    targets.removeClass('nav-selected');
+    const selected = targets.eq(createTargetIndex).addClass('nav-selected');
+    if (focusElement) selected.trigger('focus');
+}
+
+function updateCreationReview() {
+    const fullName = `${fieldValue('firstname')} ${fieldValue('lastname')}`.trim();
+    $('#creation-review').html(
+        detailCard('Name', fullName || 'Not entered') +
+        detailCard('Birthdate', fieldValue('birthdate') || 'Not entered') +
+        detailCard('Nationality', fieldValue('nationality') || 'Not entered') +
+        detailCard('Gender', selectedGender === 1 ? 'Female' : 'Male')
+    ).find('.detail-card').addClass('review-card').removeClass('detail-card');
+}
+
+function renderCreateStep(focusElement) {
+    currentCreateStep = Math.max(0, Math.min(3, currentCreateStep));
+    $('.create-step').removeClass('active');
+    $(`.create-step[data-step="${currentCreateStep}"]`).addClass('active');
+    $('#create-step-title').text(createStepTitles[currentCreateStep]);
+    $('#create-step-count').text(`${currentCreateStep + 1} / 4`);
+    $('.step-dot').each(function (index) {
+        $(this).toggleClass('active', index === currentCreateStep);
+        $(this).toggleClass('complete', index < currentCreateStep);
+    });
+
+    $('#create-previous').toggle(currentCreateStep > 0);
+    $('#create-next span:first').text(currentCreateStep === 3 ? 'Create Character' : 'Continue');
+    $('#create-next .action-arrow').text(currentCreateStep === 3 ? '✓' : '›');
+    $('#create-feedback').text('');
+
+    if (currentCreateStep === 3) updateCreationReview();
+    createTargetIndex = 0;
+    applyCreateTarget(0, focusElement);
+}
+
+function previousCreateStep() {
+    if (characterLoading || loadRequestPending) return;
+    if (currentCreateStep === 0) {
+        setView('roster');
+        return;
+    }
+    currentCreateStep -= 1;
+    renderCreateStep(true);
+}
+
+function nextCreateStep() {
+    if (characterLoading || loadRequestPending || createSubmitting) return;
+    if (currentCreateStep < 3) {
+        if (!validateCreateStep(currentCreateStep, true)) {
+            $('#create-feedback').text('Complete the current page before continuing.');
+            applyCreateTarget(0, true);
+            return;
+        }
+        currentCreateStep += 1;
+        renderCreateStep(true);
+        return;
+    }
+    submitCreateCharacter();
+}
+
+function submitCreateCharacter() {
+    if (!selectedSlot || createSubmitting || loadRequestPending || !validateCreateForm(true)) {
+        $('#create-feedback').text('Complete every identity field before creating the character.');
+        return;
+    }
+
+    createSubmitting = true;
+    loadRequestPending = true;
+    $('#create-next').prop('disabled', true).find('span:first').text('Creating...');
+    $('#create-feedback').text('Creating character...');
+
+    nui('createNewCharacter', {
+        cid: selectedSlot,
+        firstname: fieldValue('firstname'),
+        lastname: fieldValue('lastname'),
+        birthdate: fieldValue('birthdate'),
+        nationality: fieldValue('nationality'),
+        gender: selectedGender
+    }).fail(() => {
+        createSubmitting = false;
+        loadRequestPending = false;
+        $('#create-next').prop('disabled', false).find('span:first').text('Create Character');
+        $('#create-feedback').text('The game client did not accept the creation request.');
+    });
+}
+
+function enterCounty() {
+    const character = charactersBySlot[selectedSlot];
+    if (!character || characterLoading || loadRequestPending) return;
+    loadRequestPending = true;
+    $('#character-feedback').text('Loading character...');
+    visibleActions('#character-actions').prop('disabled', true);
+    nui('selectCharacter', { cData: character }).fail(() => {
+        loadRequestPending = false;
+        visibleActions('#character-actions').prop('disabled', false);
+        $('#character-feedback').text('The game client did not accept the load request.');
+        applyActionSelection('#character-actions', 0, false);
+    });
+}
+
+function openDeleteView() {
+    const character = charactersBySlot[selectedSlot];
+    if (!character || characterLoading || loadRequestPending) return;
+    const fullName = `${character.charinfo?.firstname || ''} ${character.charinfo?.lastname || ''}`.trim() || 'This character';
+    $('#delete-character-name').text(`${fullName} and all saved data will be permanently removed.`);
+    $('#delete-feedback').text('');
+    setView('delete');
+}
+
+function confirmDelete() {
+    const character = charactersBySlot[selectedSlot];
+    if (!character || characterLoading || loadRequestPending) return;
+    loadRequestPending = true;
+    $('#delete-feedback').text('Deleting character...');
+    visibleActions('#delete-actions').prop('disabled', true);
+    nui('removeCharacter', { citizenid: character.citizenid }).fail(() => {
+        loadRequestPending = false;
+        visibleActions('#delete-actions').prop('disabled', false);
+        $('#delete-feedback').text('The game client did not accept the delete request.');
+        applyActionSelection('#delete-actions', 0, false);
+    });
+}
+
+function refreshCharacters() {
+    selectedSlot = null;
+    charactersBySlot = {};
+    rosterIndex = 0;
+    renderSlots();
+    setView('roster');
+    nui('setupCharacters');
+}
+
+function runAction(action) {
+    if (action === 'back-roster') setView('roster');
+    else if (action === 'enter-county') enterCounty();
+    else if (action === 'open-delete') openDeleteView();
+    else if (action === 'cancel-delete') showExistingCharacter(charactersBySlot[selectedSlot]);
+    else if (action === 'confirm-delete') confirmDelete();
+    else if (action === 'create-back') previousCreateStep();
+    else if (action === 'create-next') nextCreateStep();
+}
+
+function handleRosterKeys(event) {
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        rosterIndex += event.key === 'ArrowDown' ? 1 : -1;
+        applyRosterSelection(true);
+    } else if (event.key === 'Enter' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        const slot = Number($('.character-slot').eq(rosterIndex).data('slot'));
+        if (slot) selectSlot(slot);
+    }
+}
+
+function handleActionKeys(event, containerSelector, backAction) {
+    const actions = visibleActions(containerSelector);
+    if (!actions.length) return;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        actionIndex += event.key === 'ArrowDown' ? 1 : -1;
+        applyActionSelection(containerSelector, actionIndex, true);
+    } else if (event.key === 'Enter' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        actions.eq(actionIndex).trigger('click');
+    } else if (event.key === 'ArrowLeft' || event.key === 'Escape' || event.key === 'Backspace') {
+        event.preventDefault();
+        runAction(backAction);
+    }
+}
+
+function handleCreateKeys(event) {
+    const target = $(event.target);
+    const isTextInput = target.hasClass('char-reg-input');
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        createTargetIndex += event.key === 'ArrowDown' ? 1 : -1;
+        applyCreateTarget(createTargetIndex, true);
+        if (currentCreateStep === 2) activeCreateTargets().eq(createTargetIndex).trigger('click');
+        return;
+    }
+
+    if (currentCreateStep === 2 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault();
+        createTargetIndex += event.key === 'ArrowRight' ? 1 : -1;
+        applyCreateTarget(createTargetIndex, true);
+        activeCreateTargets().eq(createTargetIndex).trigger('click');
+        return;
+    }
+
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        if (currentCreateStep === 2) {
+            activeCreateTargets().eq(createTargetIndex).trigger('click');
+            nextCreateStep();
+        } else if (currentCreateStep === 3) {
+            activeCreateTargets().eq(createTargetIndex).trigger('click');
+        } else {
+            nextCreateStep();
+        }
+        return;
+    }
+
+    if (event.key === 'Escape' || (!isTextInput && (event.key === 'ArrowLeft' || event.key === 'Backspace'))) {
+        event.preventDefault();
+        previousCreateStep();
+    }
+}
+
+$(document).ready(() => {
+    resetSelection();
+
+    window.addEventListener('message', (event) => {
         const data = event.data || {};
 
         if (data.action === 'ui') {
-            NChar = data.nChar;
+            characterLimit = Number(data.nChar) || 5;
             if (data.toggle) {
-                selectedChar = null;
                 characterLoading = false;
                 loadRequestPending = false;
                 createSubmitting = false;
-                $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
-                $('.container').show();
-                $('.welcomescreen').fadeIn(150);
-                qbMultiCharacters.resetAll();
-
-                let originalText = 'Retrieving player data';
-                let loadingProgress = 0;
-                let loadingDots = 0;
-                $('#loading-text').html(originalText);
-                const dotsInterval = setInterval(function () {
-                    $('#loading-text').append('.');
-                    loadingDots++;
-                    loadingProgress++;
-                    if (loadingProgress === 3) originalText = 'Validating player data';
-                    if (loadingProgress === 4) originalText = 'Retrieving characters';
-                    if (loadingProgress === 6) originalText = 'Validating characters';
-                    if (loadingDots === 4) {
-                        $('#loading-text').html(originalText);
-                        loadingDots = 0;
-                    }
-                }, 500);
-
-                setTimeout(function () {
-                    setCharactersList();
-                    nui('setupCharacters');
-                    setTimeout(function () {
-                        clearInterval(dotsInterval);
-                        $('.welcomescreen').fadeOut(150);
-                        qbMultiCharacters.fadeInDown('.character-info', '20%', 400);
-                        qbMultiCharacters.fadeInDown('.characters-list', '20%', 400);
-                        nui('removeBlur');
-                    }, 2000);
-                }, 2000);
+                charactersBySlot = {};
+                $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
+                $('.container').show().attr('aria-hidden', 'false');
+                $('#selector-content').hide();
+                $('#selector-loading').show();
+                resetSelection();
+                renderSlots();
+                nui('setupCharacters');
             } else {
-                $('.container').fadeOut(250);
-                qbMultiCharacters.resetAll();
-                resetCreateForm();
-                selectedChar = null;
-                characterLoading = false;
-                loadRequestPending = false;
+                $('.container').hide().attr('aria-hidden', 'true');
+                resetSelection();
             }
         }
 
         if (data.action === 'selectionReset') {
-            selectedChar = null;
-            characterLoading = false;
-            loadRequestPending = false;
-            createSubmitting = false;
-            $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
-            $('#play').removeClass('loading disabled');
-            $('#play-text').text('Select a character');
-            resetCreateForm();
+            resetSelection();
+            $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
+        }
+
+        if (data.action === 'setupCharacters') {
+            charactersBySlot = {};
+            Object.values(data.characters || {}).forEach((character) => {
+                const slot = Number(character.slot || character.cid || 1);
+                charactersBySlot[slot] = character;
+            });
+            renderSlots();
+            $('#selector-loading').hide();
+            $('#selector-content').fadeIn(140);
+            setView('roster');
         }
 
         if (data.action === 'characterLoading') {
@@ -166,231 +489,87 @@ $(document).ready(function () {
                 loadRequestPending = false;
                 $('#character-loading-title').text(data.title || 'YOU ARE WAKING UP');
                 $('#character-loading-message').text(data.message || 'Returning to your last location...');
-                $('.character-register, .character-delete, .welcomescreen').stop(true, true).hide();
-                $('.characters-list, .character-info').stop(true, true).hide();
-                $('.character-loading-overlay').stop(true, true).fadeIn(180).attr('aria-hidden', 'false');
+                $('.character-loading-overlay').fadeIn(160).attr('aria-hidden', 'false');
             } else {
                 characterLoading = false;
                 loadRequestPending = false;
-                $('.character-loading-overlay').stop(true, true).fadeOut(180).attr('aria-hidden', 'true');
+                $('.character-loading-overlay').fadeOut(160).attr('aria-hidden', 'true');
             }
         }
 
         if (data.action === 'characterLoadFailed') {
             characterLoading = false;
             loadRequestPending = false;
-            $('.character-loading-overlay').stop(true, true).hide().attr('aria-hidden', 'true');
-            $('#play').removeClass('loading disabled');
-            $('#play-text').text(selectedChar && $(selectedChar).data('cid') !== '' ? 'Play' : 'Create');
+            $('.character-loading-overlay').hide().attr('aria-hidden', 'true');
+            visibleActions('#character-actions').prop('disabled', false);
+            if (selectedSlot && charactersBySlot[selectedSlot]) showExistingCharacter(charactersBySlot[selectedSlot]);
+            $('#character-feedback').text(data.message || 'Character could not be loaded.');
         }
 
-        if (data.action === 'setupCharacters') setupCharacters(data.characters || []);
-        if (data.action === 'setupCharInfo') setupCharInfo(data.chardata);
         if (data.action === 'createResult' && data.success === false) {
+            createSubmitting = false;
             loadRequestPending = false;
-            showCreateResult(data.message);
+            $('#create-next').prop('disabled', false).find('span:first').text('Create Character');
+            $('#create-feedback').text(data.message || 'Character could not be created.');
         }
+
         if (data.action === 'deleteResult') {
-            $('.character-delete').fadeOut(150);
+            loadRequestPending = false;
+            visibleActions('#delete-actions').prop('disabled', false);
             if (data.success) refreshCharacters();
+            else {
+                $('#delete-feedback').text(data.message || 'Character could not be deleted.');
+                applyActionSelection('#delete-actions', 0, false);
+            }
         }
+    });
+
+    $(document).on('click', '.character-slot', function () {
+        rosterIndex = $(this).index();
+        selectSlot($(this).data('slot'));
+    });
+
+    $(document).on('click', '[data-action]', function () {
+        runAction($(this).data('action'));
     });
 
     $(document).on('input', '.char-reg-input', function () {
         validateField(this.id, false);
-        $('.form-submit-feedback').text('');
-        validateCreateForm(false);
+        $('#create-feedback').text('');
     });
 
+    $(document).on('focus', '.char-reg-input', function () {
+        const targets = activeCreateTargets();
+        createTargetIndex = Math.max(0, targets.index(this));
+        targets.removeClass('nav-selected');
+        $(this).addClass('nav-selected');
+    });
 
-    $(document).on('click', '.gender-button', function (event) {
-        event.preventDefault();
+    $(document).on('click', '.gender-choice', function () {
         selectedGender = Number($(this).data('gender')) === 1 ? 1 : 0;
-        $('.gender-button').removeClass('selected');
-        $(this).addClass('selected');
-        validateCreateForm(false);
+        $('.gender-choice').removeClass('selected nav-selected');
+        $(this).addClass('selected nav-selected');
+        createTargetIndex = $('.gender-choice').index(this);
     });
 
-    resetCreateForm();
-});
-
-$('.disconnect-btn').click(function (event) {
-    event.preventDefault();
-    nui('closeUI');
-    nui('disconnectButton');
-});
-
-function setupCharInfo(cData) {
-    if (cData === 'empty') {
-        $('.character-info-valid').html('<span id="no-char">The selected character slot is not in use yet.<br><br>This character does not have information yet.</span>');
-        return;
-    }
-
-    $('.character-info-valid').html(
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-user"> <span id="info-label">NAME :</i> </span><span class="char-info-js">' + escapeHtml(cData.charinfo.firstname) + ' ' + escapeHtml(cData.charinfo.lastname) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-calendar"> <span id="info-label">BIRTH DATE :</i> </span><span class="char-info-js">' + escapeHtml(cData.charinfo.birthdate) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-address-card"> <span id="info-label">NATIONALITY :</i> </span><span class="char-info-js">' + escapeHtml(cData.charinfo.nationality) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-briefcase"> <span id="info-label">JOB :</i> </span><span class="char-info-js">' + escapeHtml(cData.job.label) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-users"> <span id="info-label">GANG :</i> </span><span class="char-info-js">' + escapeHtml(cData.gang.label) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-wallet"> <span id="info-label">CASH :</i> </span><span class="char-info-js">&#36; ' + Number(cData.money.cash || 0).toFixed(2) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-piggy-bank"> <span id="info-label">BANK :</i> </span><span class="char-info-js">&#36; ' + Number(cData.money.bank || 0).toFixed(2) + '</span></div>' +
-        '<div class="character-info-box"><span id="info-label"><i class="fas fa-money-bill-alt"> <span id="info-label">BLOODMONEY :</i> </span><span class="char-info-js">&#36; ' + Number(cData.money.bloodmoney || 0).toFixed(2) + '</span></div>'
-    );
-}
-
-function setupCharacters(characters) {
-    $.each(characters, function (_, character) {
-        const slot = Number(character.slot || character.cid || 1);
-        const element = $('#char-' + slot);
-        element.html('');
-        element.data('citizenid', character.citizenid);
-        element.data('cData', character);
-        element.data('cid', slot);
-        element.html('<span id="slot-name">' + escapeHtml(character.charinfo.firstname) + ' ' + escapeHtml(character.charinfo.lastname) + '<span id="cid">' + escapeHtml(character.citizenid) + '</span></span>');
+    $(document).on('focus mouseenter', '.flow-action', function () {
+        const container = $(this).closest('.action-list, .create-actions');
+        const actions = container.find('.flow-action:visible:not(:disabled)');
+        actionIndex = Math.max(0, actions.index(this));
+        actions.removeClass('nav-selected');
+        $(this).addClass('nav-selected');
     });
-}
 
-$(document).on('click', '.character', function (event) {
-    event.preventDefault();
-    if (characterLoading || loadRequestPending) return;
-    const cDataPed = $(this).data('cData');
+    $(document).on('keydown', (event) => {
+        if (!$('.container').is(':visible') || characterLoading || loadRequestPending) return;
+        if (currentView === 'roster') handleRosterKeys(event);
+        else if (currentView === 'character') handleActionKeys(event, '#character-actions', 'back-roster');
+        else if (currentView === 'delete') handleActionKeys(event, '#delete-actions', 'cancel-delete');
+        else if (currentView === 'create') handleCreateKeys(event);
+    });
 
-    if (selectedChar !== null && $(selectedChar).attr('id') === $(this).attr('id')) return;
-    if (selectedChar !== null) $(selectedChar).removeClass('char-selected');
-
-    selectedChar = $(this);
-    $(selectedChar).addClass('char-selected');
-
-    if ($(selectedChar).data('cid') === '') {
-        setupCharInfo('empty');
-        $('#play-text').html('Create');
-        $('#play').css({ display: 'block' });
-        $('#delete').css({ display: 'none' });
-    } else {
-        setupCharInfo($(this).data('cData'));
-        $('#play-text').html('Play');
-        $('#delete-text').html('Delete');
-        $('#play').css({ display: 'block' });
-        $('#delete').css({ display: 'block' });
-    }
-
-    nui('cDataPed', { cData: cDataPed });
-});
-
-$(document).on('click', '#create', function (event) {
-    event.preventDefault();
-    if (createSubmitting || !validateCreateForm(true) || selectedChar === null) return;
-
-    createSubmitting = true;
-    loadRequestPending = true;
-    $('#create').addClass('submitting disabled');
-    $('.form-submit-feedback').text('Creating character...');
-
-    nui('createNewCharacter', {
-        cid: Number($(selectedChar).attr('id').replace('char-', '')),
-        firstname: fieldValue('firstname'),
-        lastname: fieldValue('lastname'),
-        birthdate: fieldValue('birthdate'),
-        nationality: fieldValue('nationality'),
-        gender: selectedGender
-    }).fail(function () {
-        loadRequestPending = false;
-        showCreateResult('The game client did not accept the creation request.');
+    $('#disconnect').on('click', () => {
+        nui('closeUI');
+        nui('disconnectButton');
     });
 });
-
-$(document).on('click', '#accept-delete', function (event) {
-    event.preventDefault();
-    if (!selectedChar) return;
-    nui('removeCharacter', { citizenid: $(selectedChar).data('citizenid') });
-});
-
-$(document).on('click', '#cancel-delete', function (event) {
-    event.preventDefault();
-    $('.character-delete').fadeOut(150);
-});
-
-function setCharactersList() {
-    let htmlResult = '<div class="character-list-header"><p>My Characters</p></div>';
-    for (let i = 1; i <= NChar; i++) {
-        htmlResult += '<div class="character" id="char-' + i + '" data-cid=""><span id="slot-name">Empty Slot<span id="cid"></span></span></div>';
-    }
-    htmlResult += '<div class="character-btn" id="play"><p id="play-text">Select a character</p></div><div class="character-btn" id="delete"><p id="delete-text">Select a character</p></div>';
-    $('.characters-list').html(htmlResult);
-}
-
-function refreshCharacters() {
-    setCharactersList();
-    setTimeout(function () {
-        if (selectedChar) $(selectedChar).removeClass('char-selected');
-        selectedChar = null;
-        loadRequestPending = false;
-        nui('setupCharacters');
-        $('#delete').css({ display: 'none' });
-        $('#play').css({ display: 'none' });
-        $('.character-info-valid').html('<span id="no-char">Select a character slot to see all information about your character.</span>');
-    }, 100);
-}
-
-$('#close-reg').click(function (event) {
-    event.preventDefault();
-    $('.characters-list').css('filter', 'none');
-    $('.character-info').css('filter', 'none');
-    qbMultiCharacters.fadeOutDown('.character-register', '125%', 400);
-    resetCreateForm();
-});
-
-$(document).on('click', '#play', function (event) {
-    event.preventDefault();
-    if (selectedChar === null || characterLoading || loadRequestPending) return;
-
-    const charData = $(selectedChar).data('cid');
-    if (charData !== '') {
-        loadRequestPending = true;
-        $('#play').addClass('loading disabled');
-        $('#play-text').text('Loading...');
-        nui('selectCharacter', { cData: $(selectedChar).data('cData') }).fail(function () {
-            loadRequestPending = false;
-            $('#play').removeClass('loading disabled');
-            $('#play-text').text('Play');
-        });
-    } else {
-        resetCreateForm();
-        $('.characters-list').css('filter', 'blur(2px)');
-        $('.character-info').css('filter', 'blur(2px)');
-        qbMultiCharacters.fadeInDown('.character-register', '25%', 400);
-        setTimeout(function () { $('#firstname').trigger('focus'); }, 450);
-    }
-});
-
-$(document).on('click', '#delete', function (event) {
-    event.preventDefault();
-    if (characterLoading || loadRequestPending) return;
-    if (selectedChar !== null && $(selectedChar).data('cid') !== '') {
-        $('.character-delete').fadeIn(250);
-    }
-});
-
-qbMultiCharacters.fadeOutUp = function (element, time) {
-    $(element).css({ display: 'block' }).animate({ top: '-80.5%' }, time, function () {
-        $(element).css({ display: 'none' });
-    });
-};
-
-qbMultiCharacters.fadeOutDown = function (element, percent, time) {
-    const target = percent !== undefined ? percent : '103.5%';
-    $(element).css({ display: 'block' }).animate({ top: target }, time, function () {
-        $(element).css({ display: 'none' });
-    });
-};
-
-qbMultiCharacters.fadeInDown = function (element, percent, time) {
-    $(element).css({ display: 'block' }).animate({ top: percent }, time);
-};
-
-qbMultiCharacters.resetAll = function () {
-    $('.characters-list').hide().css('top', '-40');
-    $('.character-info').hide().css('top', '-40');
-    $('.welcomescreen').css('top', WelcomePercentage);
-    $('.server-log').show().css('top', '25%');
-};
