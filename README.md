@@ -1,6 +1,9 @@
 [README.md](https://github.com/user-attachments/files/30808553/README.md)
 # node7-charselect
 
+
+<img width="1555" height="1064" alt="radiooooooo" src="https://github.com/user-attachments/assets/6bc63bfd-7a43-4dfd-a22f-01f4419a5122" />
+
 NODE7 RedM character selection with a true nested side-panel flow, keyboard navigation, and no preview ped.
 
 ## Requirements
