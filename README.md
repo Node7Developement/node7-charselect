@@ -3,7 +3,14 @@
 # node7-charselect
 
 
-<img width="1681" height="1070" alt="characterselectorrrrr" src="https://github.com/user-attachments/assets/cecfdbfa-6021-4d8c-a01b-6ea28f2daec3" />
+
+
+
+
+
+
+<img width="1920" height="1080" alt="charselectupdate" src="https://github.com/user-attachments/assets/c1f24d20-82a5-4e96-a999-59f033eb56fe" />
+
 
 
 NODE7 RedM character selection with a true nested side-panel flow, keyboard navigation, and no preview ped.
